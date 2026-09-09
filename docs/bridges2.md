@@ -54,20 +54,59 @@ bash scripts/bridges2/setup_env.sh
 ## Verifying the neuralforecast API before integrating it
 
 `neuralforecast`'s exact `NBEATS` constructor kwargs and `predict()` output column names weren't
-assumed — `scripts/bridges2/diagnose_nbeats.py` (submitted via `diagnose.sbatch`) trains a tiny
-NBEATS on synthetic data and prints the real signature and output shape for the version actually
-installed, the same empirical-first approach used for the statsforecast wrapper in Phase 2.
+assumed — `scripts/bridges2/diagnose_nbeats.py` (submitted via `diagnose.sbatch`) trained a tiny
+NBEATS on synthetic data on a real V100 (`v018`) and confirmed, against the actually-installed
+`neuralforecast==3.2.2`:
+
+- **fp16 really runs, not bf16**: log shows `Using 16bit Automatic Mixed Precision (AMP)` with
+  `precision="16-mixed"` passed through `**trainer_kwargs` (PyTorch Lightning under the hood).
+- **`predict()` output columns**: `{alias}-lo-80.0`, `{alias}-median`, `{alias}-hi-80.0` for
+  `loss=MQLoss(quantiles=[0.1, 0.5, 0.9])` — Nixtla's shared lo/hi/level convention (same family
+  as the statsforecast wrapper in `models/base.py`), with a `.0` suffix on the level number and a
+  `-median` column instead of the bare alias for P50. Not the `-q-10/50/90` naming that would've
+  been an equally plausible guess.
+- **NBEATS forecasts the full horizon in one `predict()` call** — no recursive rollout needed
+  (unlike `models/lightgbm_global.py`), since `predict()` continues forward from wherever `fit()`
+  ended.
+
+`reorderpoint/models/deep.py` implements the real integration from these confirmed facts.
+`neuralforecast`/`torch` are never imported by `backtest.py` directly — `deep.py` is only ever
+imported by `scripts/bridges2/run_deep_backtest.py`, which runs on Bridges-2, not the M2 (verified
+locally: `make test`/`make lint` pass unaffected on this machine, which doesn't have `torch`
+installed at all).
+
+## Scope: univariate, no exogenous features
+
+Unlike LightGBM's feature pipeline (lags, rolling stats, calendar, price, SNAP), the NBEATS
+integration here only uses each series' own `y` history — no `hist_exog_list`/`futr_exog_list`
+passed to the model. This is a deliberate Phase 7 scoping choice: extending N-BEATS to consume the
+same exogenous features LightGBM does is a real feature-engineering project of its own, not
+something a stretch phase should absorb. The comparison in `reports/backtest_deep_<date>.md` is
+still an honest apples-to-apples accuracy/cost comparison — it just means a NBEATS loss (if any)
+against LightGBM could partly reflect this feature gap, not only architecture.
+
+## Running the real comparison
+
+`scripts/bridges2/run_deep_backtest.py` reuses `backtest.py`/`decision.py`'s existing
+fold/sampling/report machinery unchanged (monkeypatches `bt.MODEL_FACTORIES` down to just
+`SeasonalNaive` + `NBEATS` before calling `bt.run_backtest`/`decision.run_decision_backtest`) —
+same 400-series sample, same 4 folds, same seed as every earlier phase, so the results merge
+directly into the existing comparison tables without re-spending GPU-hours re-running
+AutoETS/AutoTheta/LightGBM (those don't need a GPU and their numbers are already known-reproducible
+under this exact fixed setup).
 
 ```bash
-sbatch scripts/bridges2/diagnose.sbatch
-# wait for it to finish (squeue -u $USER), then:
-cat stockup-diag_<jobid>.out
+# panel.parquet must be copied over first — it's gitignored, not part of the git clone (see the
+# main session's instructions for the scp command)
+sbatch scripts/bridges2/run_deep_backtest.sbatch
+squeue -u $USER   # wait for it to clear
+cat stockup-nbeats_<jobid>.out
+cat stockup-nbeats_<jobid>.err
 ```
 
-`reorderpoint/models/deep.py` and the real training/backtest job get written from that output,
-not before.
+Writes `reports/backtest_deep_<date>.md` and `reports/decision_deep_<date>.md` — copy both back to
+the M2 (`scp bridges2:~/stockup/reports/*_deep_*.md reports/`) for the final README write-up.
 
 ## Status
 
-Diagnostic in progress — this file gets the real `NBEATS` integration details once
-`diagnose_nbeats.py`'s output is in hand.
+Diagnostic confirmed, integration written, awaiting the real 400-series/4-fold run.
