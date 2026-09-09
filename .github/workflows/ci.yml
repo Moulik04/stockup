@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # LightGBM's OpenMP runtime on Linux — the same libomp dependency this project's README
+      # flags for macOS (Homebrew), here as the Debian/Ubuntu package instead. See DECISIONS.md.
+      - name: Install libgomp
+        run: sudo apt-get update && sudo apt-get install -y libgomp1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run black --check .
+
+      # Runs the full unit/schema/leakage test suite, including tests/test_smoke.py — a real
+      # (not mocked) end-to-end backtest on a small synthetic panel, master prompt §10 Phase 6's
+      # "smoke backtest on a tiny fixture" acceptance criterion.
+      - name: Test
+        run: uv run pytest -q
