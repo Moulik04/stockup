@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.git/
+.pytest_cache/
+.ruff_cache/
+notebooks/
+reports/
+tests/
+data/track_a/raw/
+data/track_b/
+outputs/
+logs/
+.env
