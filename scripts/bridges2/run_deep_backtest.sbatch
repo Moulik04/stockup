@@ -2,7 +2,7 @@
 #SBATCH --job-name=stockup-nbeats
 #SBATCH --partition=GPU-shared
 #SBATCH --gres=gpu:v100-32:1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=5
 #SBATCH --mem=32G
 #SBATCH --time=03:00:00
 #SBATCH --output=%x_%j.out
