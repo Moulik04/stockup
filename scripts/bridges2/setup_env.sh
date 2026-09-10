@@ -29,6 +29,13 @@ uv sync --cache-dir /ocean/projects/$PSC_ALLOCATION/$USER/uv_cache --frozen
 
 uv pip install --cache-dir /ocean/projects/$PSC_ALLOCATION/$USER/uv_cache neuralforecast
 
+# backtest.py/decision.py import reorderpoint.models (naive, statistical, lightgbm_global)
+# unconditionally at module load, even though run_deep_backtest.py only actually *uses*
+# naive + the new NBEATS model — the imports still need to resolve. python-dotenv is
+# reorderpoint.config's own dependency, needed regardless of which models run.
+uv pip install --cache-dir /ocean/projects/$PSC_ALLOCATION/$USER/uv_cache \
+    python-dotenv statsforecast lightgbm
+
 echo ""
 echo "Setup complete. Activate in future sessions/jobs with:"
 echo "  module load pytorch/26.05-2.11-py3"
