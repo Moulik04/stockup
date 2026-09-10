@@ -109,4 +109,20 @@ the M2 (`scp bridges2:~/stockup/reports/*_deep_*.md reports/`) for the final REA
 
 ## Status
 
-Diagnostic confirmed, integration written, awaiting the real 400-series/4-fold run.
+Complete. Real 400-series/4-fold run finished 2026-09-10 (`reports/backtest_deep_2026-09-10.md`,
+`reports/decision_deep_2026-09-10.md`): NBEATS beats every model on accuracy (MASE 1.108, better
+than LightGBM's 1.587) but **loses on decision cost** ($17,209/fold vs. LightGBM's $14,543 and
+SeasonalNaive's $15,224) — per this project's own Phase 7 acceptance bar ("keep only if it wins on
+decision cost"), it is not adopted. LightGBM remains the production model. Full root-cause
+discussion in `DECISIONS.md` (kept local, not in this public repo) — short version: NBEATS's
+superior point accuracy removes an unintentional "over-forecasting margin" that cruder models were
+providing, and every model this project has evaluated at the decision layer (not just NBEATS)
+falls short of the 95% service-level target, suggesting the safety-stock formula's normal-
+distribution assumption under-provisions for this zero-inflated, right-skewed demand more broadly.
+
+Getting to this result required three real environment bugs on the way (see `setup_env.sh`'s
+history): missing project dependencies beyond `neuralforecast`, a non-idempotent setup script with
+no verification gate, and — the actual root cause of the most confusing failure — `module load`
+on this cluster activates the read-only base module as a venv, leaving `VIRTUAL_ENV` pointing at
+the wrong place unless explicitly unset. `setup_env.sh` now handles all three; a fresh
+`bash scripts/bridges2/setup_env.sh` should work cleanly end to end.
