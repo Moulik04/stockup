@@ -13,6 +13,14 @@ balance on models that don't need a GPU at all.
 from __future__ import annotations
 
 import datetime as dt
+import sys
+from pathlib import Path
+
+# Run via `python3 scripts/bridges2/run_deep_backtest.py` (a direct script path, not `-m`), which
+# does not add the repo root to sys.path the way `-m`/`-c` do — see DECISIONS.md's "must not
+# import reorderpoint" entry for scripts/*.py. That rule is for standalone utilities; this script
+# genuinely needs the package, so it fixes up sys.path itself instead.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import pandas as pd
 
