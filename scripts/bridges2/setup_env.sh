@@ -9,8 +9,10 @@
 # (/ocean/projects/$PSC_ALLOCATION/$USER, confirmed writable, 10GB allocation) instead, so setup
 # happens once and every later `sbatch` submission just activates the existing venv.
 #
-# Safe to re-run: verifies the existing venv first and does nothing if it's already complete,
-# so this is the one command to run any time the environment might be in doubt.
+# Safe to re-run: checks the existing venv's own python binary directly (never sources a
+# possibly-broken activate script during the check) and does nothing if it's already complete.
+# `uv`'s path is captured once right after module load and used explicitly everywhere, so it
+# can't go missing later regardless of what sourcing activate/deactivate does to PATH.
 #
 # Run from a Bridges-2 login node (via the OnDemand web shell or ssh):
 #   bash scripts/bridges2/setup_env.sh
@@ -19,12 +21,16 @@ set -euo pipefail
 
 VENV_DIR=/ocean/projects/$PSC_ALLOCATION/$USER/stockup-env
 CACHE_DIR=/ocean/projects/$PSC_ALLOCATION/$USER/uv_cache
+PY_INTERP=/opt/packages/uv/python/cpython-3.13.7-linux-x86_64-gnu
 
 module load pytorch/26.05-2.11-py3
+UV_BIN="$(command -v uv)"
+echo "Using uv at: $UV_BIN"
 
 verify() {
-    python3 - <<'PYEOF'
-import importlib
+    # $1 = path to a python3 executable to test (never relies on an activated shell).
+    "$1" - <<'PYEOF'
+import importlib.util
 import sys
 
 # pandas/torch come from the base module; neuralforecast/dotenv/statsforecast/lightgbm are
@@ -42,32 +48,31 @@ PYEOF
 mkdir -p "$VENV_DIR"
 cd "$VENV_DIR"
 
-if [ -f .venv/bin/activate ]; then
-    echo "Existing venv found — checking whether it's already complete..."
-    source .venv/bin/activate
-    if verify; then
-        echo "Environment already complete. Nothing to do."
-        exit 0
-    fi
-    echo "Existing venv is incomplete — rebuilding from scratch."
+if [ -x .venv/bin/python3 ] && verify .venv/bin/python3; then
+    echo "Environment already complete. Nothing to do."
+    echo "Activate in future sessions/jobs with:"
+    echo "  module load pytorch/26.05-2.11-py3"
+    echo "  source $VENV_DIR/.venv/bin/activate"
+    exit 0
 fi
 
-echo "Building venv from scratch..."
-uv venv --python /opt/packages/uv/python/cpython-3.13.7-linux-x86_64-gnu
-source .venv/bin/activate
+echo "Venv missing or incomplete — rebuilding from scratch."
+rm -rf .venv pyproject.toml uv.lock
+
+"$UV_BIN" venv --python "$PY_INTERP"
 
 cp /opt/packages/AI/pytorch_26.05-py3/pyproject.toml .
 cp /opt/packages/AI/pytorch_26.05-py3/uv.lock .
-uv sync --cache-dir "$CACHE_DIR" --frozen
+"$UV_BIN" sync --cache-dir "$CACHE_DIR" --frozen
 
 echo "Adding this project's own packages (one combined install, not several separate calls —"
 echo "multiple uv pip install calls in sequence risk the resolver silently dropping something"
 echo "already installed when reconciling a later call)..."
-uv pip install --cache-dir "$CACHE_DIR" neuralforecast python-dotenv statsforecast lightgbm
+"$UV_BIN" pip install --cache-dir "$CACHE_DIR" neuralforecast python-dotenv statsforecast lightgbm
 
 echo ""
 echo "Verifying final environment..."
-if ! verify; then
+if ! verify .venv/bin/python3; then
     echo "Setup FAILED — see MISSING above. Do not proceed to sbatch until this passes." >&2
     exit 1
 fi
