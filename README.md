@@ -4,10 +4,12 @@ Forecast demand with calibrated uncertainty, then turn the forecast into a **reo
 (how much, when) that minimises stockout plus holding cost — proven against naive baselines in
 honest, leakage-free backtests. The output is a reorder table, not a chart.
 
-> Status: Phase 6 (serve + monitor) done. LightGBM wins on both accuracy and simulated dollars
-> (Phase 4); MinTrace reconciliation helps modestly at the most granular hierarchy levels (Phase
-> 5); a FastAPI service, batch scoring, Docker image, CI, monitoring, and a Streamlit dashboard
-> now sit on top of it (Phase 6) — see "Results" and [`docs/serving.md`](docs/serving.md).
+> Status: Phase 7 (deep model, stretch) done. LightGBM wins on both accuracy and simulated dollars
+> (Phase 4) and remains the production model — a V100-trained NBEATS beats it on raw accuracy but
+> loses badly on decision cost (Phase 7), a sharper repeat of the same lesson Phase 4 taught.
+> MinTrace reconciliation helps modestly at the most granular hierarchy levels (Phase 5); a
+> FastAPI service, batch scoring, Docker image, CI, monitoring, and a Streamlit dashboard sit on
+> top of it (Phase 6) — see "Results" and [`docs/serving.md`](docs/serving.md).
 
 ## Why
 
@@ -139,3 +141,51 @@ per-series view: history, forecast fan, reorder recommendation, latest backtest/
 headlines, and a live drift check against the panel's own history. Forward-looking exog data
 (future price/events, which no real system feeds this project) is a disclosed proxy documented in
 `docs/serving.md`, not a hidden assumption.
+
+**Deep model on Bridges-2 (Phase 7, stretch)** — an N-BEATS model (`neuralforecast`), trained on
+a PSC Bridges-2 V100 GPU in fp16 (V100/Volta doesn't support bf16 tensor cores or FlashAttention
+properly, so both are avoided entirely — verified against the real hardware before writing the
+integration, see [`docs/bridges2.md`](docs/bridges2.md)), same 400-series/4-fold setup as every
+earlier phase for a direct comparison. Full tables in
+[`reports/backtest_deep_2026-09-10.md`](reports/backtest_deep_2026-09-10.md) and
+[`reports/decision_deep_2026-09-10.md`](reports/decision_deep_2026-09-10.md).
+
+| model | MASE | coverage (nominal 80%) | mean total cost / fold | fill rate |
+|---|---|---|---|---|
+| **NBEATS** | **1.108** | **84.5%** | $17,209 | 71.5% |
+| LightGBM | 1.587 | 81.2% | **$14,543** | 81.5% |
+| SeasonalNaive | 1.633 | 73.2% | $15,224 | 83.2% |
+
+NBEATS is the most accurate model in the whole project by a wide margin — better MASE than
+LightGBM, and the only model besides LightGBM to clear the coverage bar. It also **loses badly on
+decision cost**: 18% more expensive than LightGBM, 13% more expensive than plain SeasonalNaive.
+Per this project's own Phase 7 acceptance bar ("keep only if it wins on decision cost"), **NBEATS
+is not adopted** — LightGBM stays the production model. Worth being direct about this rather than
+quietly shelving the result: the headline model of the "stretch" phase lost, and that's the more
+useful finding, not a disappointing one.
+
+**Why it loses, and what it reveals.** The holding/stockout split is the tell: NBEATS holds 30%
+less inventory and stocks out far more than SeasonalNaive (fill rate 71.5% vs. 83.2%). This is the
+same directional pattern as Phase 4's original LightGBM finding — a more accurate model ending up
+*leaner*, not more conservative — but it happened even with the empirical-residual safety-stock
+fix already in place, which was built specifically to prevent that class of bug. The likely
+mechanism this time is different: on a 77%-zero-sale-day panel, seasonal naive repeats last week's
+value forward, so any series with a recent nonzero sale gets that value echoed across the whole
+horizon — inflating its average forecast (and thus its reorder point) in a way that shows up as
+*worse accuracy* but functions as an *unpriced safety margin* against demand spikes. NBEATS, being
+more accurate, doesn't carry that accidental cushion. And it's not NBEATS-specific: fill rate
+across every model this project has evaluated — LightGBM 81.5%, AutoETS 80.7%, AutoTheta 81.1%,
+MovingAverage 80.7%, SeasonalNaive 83.2%, NBEATS 71.5% — falls short of the 95% service-level
+target. That every model misses, in a narrow band except for the most accurate one, points to the
+decision layer's safety-stock formula itself: a symmetric normal approximation (`z · σ`) built
+from empirical residual variance likely understates the true risk of a right-skewed, spiky demand
+distribution, regardless of how accurately σ is measured. A skewed or empirical-quantile-based
+safety-stock formula, rather than the current normal approximation, is the natural next step —
+flagged here as a real, evidence-backed limitation rather than fixed under time pressure to force
+a cleaner headline number.
+
+**Also a scoping note, not just a result:** this NBEATS integration is univariate — no calendar,
+price, or SNAP features, unlike LightGBM's feature pipeline. Extending it to consume the same
+exogenous signals is a real feature-engineering project of its own, deliberately out of scope for
+a stretch phase (see `docs/bridges2.md`). Some of the accuracy gap, and possibly some of the cost
+gap, could reflect that feature disparity rather than architecture alone.
