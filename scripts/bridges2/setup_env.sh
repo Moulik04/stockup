@@ -27,6 +27,14 @@ module load pytorch/26.05-2.11-py3
 UV_BIN="$(command -v uv)"
 echo "Using uv at: $UV_BIN"
 
+# `module load` activates the READ-ONLY base module as a venv (sets VIRTUAL_ENV to its path —
+# confirmed: that's what "Module Activation" in the module's own help text does). If left set,
+# `uv sync`/`uv pip install` get confused about which environment to target and can try to
+# modify the read-only base env directly (this is the actual root cause of the `Permission
+# denied` error trying to remove a file under .../pytorch_26.05-py3/.../site-packages/... —
+# not a real disk permissions problem, a stale VIRTUAL_ENV pointing at the wrong place).
+unset VIRTUAL_ENV
+
 verify() {
     # $1 = path to a python3 executable to test (never relies on an activated shell).
     "$1" - <<'PYEOF'
@@ -60,6 +68,10 @@ echo "Venv missing or incomplete — rebuilding from scratch."
 rm -rf .venv pyproject.toml uv.lock
 
 "$UV_BIN" venv --python "$PY_INTERP"
+# Freshly created, known-good — safe to activate (unlike a possibly-broken existing venv, which
+# is why the check phase above never sources activate). This sets VIRTUAL_ENV to *our* venv,
+# removing any remaining ambiguity for the uv commands below.
+source .venv/bin/activate
 
 cp /opt/packages/AI/pytorch_26.05-py3/pyproject.toml .
 cp /opt/packages/AI/pytorch_26.05-py3/uv.lock .
