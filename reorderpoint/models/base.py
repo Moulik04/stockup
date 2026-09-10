@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
+import numpy as np
 import pandas as pd
 from statsforecast import StatsForecast
 
@@ -64,7 +65,10 @@ class StatsForecastQuantileModel:
         out = fc.rename(columns={"unique_id": "series_id", "ds": "date"})[
             ["series_id", "date"]
         ].copy()
-        out["p10"] = fc[f"{self._name}-lo-80"]
-        out["p50"] = fc[self._name]
-        out["p90"] = fc[f"{self._name}-hi-80"]
+        # demand can't be negative — conformal intervals aren't clipped by statsforecast itself,
+        # and routinely go negative for near-zero point forecasts on this intermittent panel
+        # (measured: ~40% of rows for SeasonalNaive). Same clip lightgbm_global.py/deep.py apply.
+        out["p10"] = np.clip(fc[f"{self._name}-lo-80"].to_numpy(), 0, None)
+        out["p50"] = np.clip(fc[self._name].to_numpy(), 0, None)
+        out["p90"] = np.clip(fc[f"{self._name}-hi-80"].to_numpy(), 0, None)
         return out

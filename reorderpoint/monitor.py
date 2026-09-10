@@ -22,17 +22,21 @@ def realised_error(log: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def rolling_mase(errors: pd.DataFrame, scale: float, window: int) -> pd.DataFrame:
-    """Per-series trailing rolling MASE: rolling mean absolute error / `scale` (each series' own
-    in-sample naive-error scale, e.g. from `backtest._in_sample_scales`).
+def rolling_mase(errors: pd.DataFrame, scale: float | pd.Series, window: int) -> pd.DataFrame:
+    """Per-series trailing rolling MASE: rolling mean absolute error / `scale`.
+
+    `scale` is each series' own in-sample naive-error scale — pass a `pd.Series` indexed by
+    series_id (e.g. `backtest._in_sample_scales(train, season_length)["scale_mae"]`) so every
+    series is divided by its own scale, not one shared value; a plain `float` applies the same
+    scale to every series, which only makes sense for a single-series call (dividing every
+    series by one series' scale would defeat MASE's whole point as a scale-free metric).
     """
     out = errors.sort_values(["series_id", "date"]).copy()
-    out["rolling_mase"] = (
-        out.groupby("series_id")["abs_error"].transform(
-            lambda s: s.rolling(window, min_periods=1).mean()
-        )
-        / scale
+    rolling_mae = out.groupby("series_id")["abs_error"].transform(
+        lambda s: s.rolling(window, min_periods=1).mean()
     )
+    scale_per_row = out["series_id"].map(scale) if isinstance(scale, pd.Series) else scale
+    out["rolling_mase"] = rolling_mae / scale_per_row
     return out
 
 
@@ -53,7 +57,14 @@ def detect_input_drift(
     recent_mean = recent.groupby("series_id")["y"].mean()
 
     stats = baseline_stats.join(recent_mean.rename("recent_mean"), how="inner")
-    safe_std = stats["std"].replace(0, np.nan)
-    z = (stats["recent_mean"] - stats["mean"]).abs() / safe_std
-    flagged = z[z > z_threshold].index.tolist()
-    return sorted(flagged)
+    diff = (stats["recent_mean"] - stats["mean"]).abs()
+
+    # A zero-variance baseline (e.g. a series that was exactly 0 throughout, common on this
+    # ~77%-zero-sale-day panel) makes any shift categorical, not just statistically significant —
+    # flag it directly rather than dividing by zero into an undetectable NaN (NaN > z_threshold
+    # is False, so this case was previously never flagged regardless of how large the shift was).
+    zero_std = stats["std"] == 0
+    z = diff / stats["std"].replace(0, np.nan)
+    flagged_normal = z[~zero_std & (z > z_threshold)].index
+    flagged_zero_std = diff[zero_std & (diff > 0)].index
+    return sorted(set(flagged_normal) | set(flagged_zero_std))

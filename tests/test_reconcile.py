@@ -215,3 +215,19 @@ def test_metrics_by_level_hand_computed():
     # bottom_node: train is constant -> in-sample scale is 0 -> NaN -> mase is NaN
     assert pd.isna(bottom_row["mase"])
     assert bottom_row["n_nodes"] == 1
+
+
+def test_metrics_by_level_all_nodes_skipped_does_not_crash():
+    # Every node's training history is too short (<= season_length), so every node gets
+    # skipped — `rows` ends up empty. pd.DataFrame([]).set_index("series_id") raises a KeyError
+    # on an empty list with no inferred columns; this must return a valid empty result instead.
+    dates = pd.date_range("2020-01-01", periods=2, freq="D")
+    train = pd.DataFrame({"series_id": ["A"] * 2, "date": dates, "y": [1.0, 2.0]})
+    test_dates = pd.date_range("2020-01-03", periods=1, freq="D")
+    merged = pd.DataFrame({"series_id": ["A"], "date": test_dates, "y": [3.0], "forecast": [3.0]})
+    lookup = pd.Series({"A": "state_id"})
+
+    out = rec.metrics_by_level(merged, train, lookup, forecast_col="forecast", season_length=7)
+
+    assert out.empty
+    assert list(out.columns) == ["level", "mase", "rmsse", "n_nodes"]

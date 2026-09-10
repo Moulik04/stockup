@@ -19,7 +19,7 @@ cd "$SLURM_SUBMIT_DIR"
 # actually trigger if `bash scripts/bridges2/setup_env.sh` was run (and passed) beforehand —
 # that's the real pre-flight check, since it runs on the login node with no GPU wait. This is a
 # belt-and-suspenders check, not a substitute for running setup_env.sh first.
-python3 -c "import pandas, torch, neuralforecast, dotenv, statsforecast, lightgbm" || {
+python3 -c "import pandas, torch, neuralforecast, dotenv, statsforecast, lightgbm, scipy" || {
     echo "Environment is missing required packages — run scripts/bridges2/setup_env.sh first." >&2
     exit 1
 }

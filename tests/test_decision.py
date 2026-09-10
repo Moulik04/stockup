@@ -226,6 +226,57 @@ def test_evaluate_fold_cost_with_dummy_model(monkeypatch):
     assert "A" in next_std.index
 
 
+class _NaNForOneSeriesModel:
+    """Like _DummyModel, but one series' forecast is NaN — simulates a model that fails to
+    produce a valid prediction for a specific series (e.g. insufficient history)."""
+
+    def fit(self, train: pd.DataFrame) -> None:
+        self._series_ids = train["series_id"].unique()
+
+    def predict_quantiles(self, horizon: int, future_exog=None) -> pd.DataFrame:
+        dates = pd.date_range("2020-06-01", periods=horizon, freq="D")
+        rows = []
+        for sid in self._series_ids:
+            p10, p50, p90 = (float("nan"),) * 3 if sid == "BAD" else (1.0, 2.0, 3.0)
+            rows.extend(
+                {"series_id": sid, "date": d, "p10": p10, "p50": p50, "p90": p90} for d in dates
+            )
+        return pd.DataFrame(rows)
+
+
+def test_evaluate_fold_cost_skips_series_with_nan_reorder_point(monkeypatch):
+    monkeypatch.setitem(bt.MODEL_FACTORIES, "PartialNaN", lambda horizon: _NaNForOneSeriesModel())
+
+    train_dates = pd.date_range("2020-01-01", periods=100, freq="D")
+    test_dates = pd.date_range("2020-06-01", periods=2, freq="D")
+    all_dates = train_dates.union(test_dates)
+    panel = pd.concat(
+        [
+            pd.DataFrame(
+                {
+                    "series_id": [sid] * len(all_dates),
+                    "date": all_dates,
+                    "y": [2.0] * len(all_dates),
+                    "price": [10.0] * len(all_dates),
+                }
+            )
+            for sid in ("GOOD", "BAD")
+        ],
+        ignore_index=True,
+    )
+    fold = bt.Fold(
+        index=1, train_end=train_dates.max(), test_start=test_dates.min(), test_end=test_dates.max()
+    )
+    costs = _costs(lead_time_days=2)
+
+    row, detail, _next_std = dec.evaluate_fold_cost(panel, fold, "PartialNaN", costs)
+
+    # BAD's NaN reorder_point must not silently "never reorder" through the simulation —
+    # it's excluded entirely, not counted as a (spuriously perfect-looking) zero-stockout series.
+    assert row["n_series"] == 1
+    assert list(detail["series_id"]) == ["GOOD"]
+
+
 def test_evaluate_fold_cost_uses_lead_time_std_override(monkeypatch):
     # Dummy's own P10/P90 spread implies a large std; passing a near-zero override should shrink
     # the resulting reorder_point (and thus on_hand_start) close to the mean, not the quantile-std.

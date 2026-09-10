@@ -27,8 +27,14 @@ def lead_time_demand_stats(forecast: pd.DataFrame, lead_time_days: int) -> pd.Da
     df = forecast.sort_values(["series_id", "date"]).copy()
     df["daily_std"] = (df["p90"] - df["p10"]) / (2 * Z80)
     df = df.groupby("series_id", sort=False).head(lead_time_days)
+    # skipna=False: pandas' default sum() treats an all-NaN group as 0, which would silently
+    # turn a model's NaN forecast (e.g. from insufficient history) into "mean=0, std=0" -- a
+    # modelling failure masquerading as "this series needs zero safety stock" -- rather than
+    # propagating NaN through to reorder_point, where evaluate_fold_cost's caller can detect and
+    # skip it explicitly instead of simulating a policy for a series that has no real forecast.
     out = df.groupby("series_id").agg(
-        mean=("p50", "sum"), _sq_std=("daily_std", lambda s: (s**2).sum())
+        mean=("p50", lambda s: s.sum(skipna=False)),
+        _sq_std=("daily_std", lambda s: (s**2).sum(skipna=False)),
     )
     out["std"] = np.sqrt(out.pop("_sq_std"))
     return out[["mean", "std"]]
@@ -253,6 +259,13 @@ def evaluate_fold_cost(
         if len(demand) == 0:
             continue
         s = float(drow["reorder_point"])
+        if not np.isfinite(s):
+            # A NaN/inf reorder_point (e.g. from a model producing a NaN forecast) makes
+            # `on_hand < s` False on every day in simulate_series -- silently "never reorders"
+            # rather than erroring or simulating something meaningful. Skip this series the same
+            # way a series with no test-period demand is already skipped above, rather than let
+            # a NaN silently masquerade as a valid (if oddly conservative) simulated outcome.
+            continue
         unit_cost = float(unit_costs.get(series_id, global_unit_cost))
         result = simulate_series(
             demand,

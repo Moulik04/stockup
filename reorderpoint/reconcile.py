@@ -128,7 +128,10 @@ def metrics_by_level(
                 "rmsse": rmsse(y_true, y_pred, y_train, season_length),
             }
         )
-    per_node = pd.DataFrame(rows).set_index("series_id")
+    # Explicit columns even when `rows` is empty (every node skipped for insufficient history) —
+    # pd.DataFrame([]) has no columns at all, so .set_index("series_id") would raise a confusing
+    # KeyError instead of this function's caller just seeing "no nodes at this level" naturally.
+    per_node = pd.DataFrame(rows, columns=["series_id", "mase", "rmsse"]).set_index("series_id")
     per_node["level"] = level_of.reindex(per_node.index)
 
     return (
