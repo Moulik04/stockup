@@ -45,6 +45,30 @@ def test_rolling_mase_hand_computed():
     assert first_row["rolling_mase"] == pytest.approx(0.0)
 
 
+def test_rolling_mase_uses_each_series_own_scale():
+    # Two series with the same rolling abs-error (5.0) but different scales — if `scale` were
+    # applied as one shared value (the bug), both would get the same rolling_mase, defeating
+    # MASE's purpose as a scale-free metric comparable across series of different volumes.
+    dates = pd.date_range("2020-01-01", periods=2, freq="D")
+    log = pd.DataFrame(
+        {
+            "series_id": ["LOW_VOL", "LOW_VOL", "HIGH_VOL", "HIGH_VOL"],
+            "date": list(dates) * 2,
+            "y": [10.0, 10.0, 100.0, 100.0],
+            "forecast": [10.0, 15.0, 100.0, 105.0],  # abs error 0, 5 for both series
+        }
+    )
+    errors = mon.realised_error(log)
+    scale = pd.Series({"LOW_VOL": 1.0, "HIGH_VOL": 10.0})
+    out = mon.rolling_mase(errors, scale=scale, window=2)
+
+    low_vol_last = out[(out["series_id"] == "LOW_VOL") & (out["date"] == dates[-1])].iloc[0]
+    high_vol_last = out[(out["series_id"] == "HIGH_VOL") & (out["date"] == dates[-1])].iloc[0]
+    # both have rolling mean abs error = 2.5, but divided by their own scale
+    assert low_vol_last["rolling_mase"] == pytest.approx(2.5)  # 2.5 / 1.0
+    assert high_vol_last["rolling_mase"] == pytest.approx(0.25)  # 2.5 / 10.0
+
+
 def test_flag_error_spikes_detects_jump_above_threshold():
     rolling = pd.DataFrame(
         {
@@ -75,3 +99,16 @@ def test_detect_input_drift_flags_shifted_series():
     flagged = mon.detect_input_drift(baseline, recent, z_threshold=3.0)
     assert "DRIFTED" in flagged
     assert "STABLE" not in flagged
+
+
+def test_detect_input_drift_flags_zero_variance_baseline_that_shifts():
+    # A series that was exactly 0 throughout its baseline window (std=0, common on this
+    # ~77%-zero-sale-day panel) then starts selling — a real, common drift case this project
+    # needs to catch, not a synthetic edge case.
+    baseline = pd.DataFrame({"series_id": ["A"] * 50 + ["STILL_ZERO"] * 50, "y": [0.0] * 100})
+    recent = pd.DataFrame(
+        {"series_id": ["A"] * 10 + ["STILL_ZERO"] * 10, "y": [5.0] * 10 + [0.0] * 10}
+    )
+    flagged = mon.detect_input_drift(baseline, recent, z_threshold=3.0)
+    assert "A" in flagged
+    assert "STILL_ZERO" not in flagged

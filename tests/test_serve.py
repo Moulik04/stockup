@@ -105,3 +105,23 @@ def test_metrics_endpoint(client):
     body = resp.json()
     assert "n_series" in body
     assert body["n_series"] == 2
+
+
+def test_future_exog_wday_matches_m5_convention():
+    # M5's wday is Saturday=1..Friday=7 (verified against the real calendar.csv), not pandas'
+    # Monday=0 dayofweek. 2011-01-28 is a real M5 Friday (wday=7); the day after it (panel's
+    # "last known date") should roll over to Saturday (wday=1) as the first future date.
+    dates = pd.date_range("2011-01-01", "2011-01-28", freq="D")  # ends on a Friday
+    panel = pd.DataFrame(
+        {
+            "series_id": ["A"] * len(dates),
+            "date": dates,
+            "y": [1.0] * len(dates),
+            "wday": [0] * len(dates),  # deliberately wrong placeholder — must be overwritten
+        }
+    )
+    future = serve.future_exog_from_trailing_window(panel, ["A"], horizon=7)
+    future = future.sort_values("date").reset_index(drop=True)
+
+    # 2011-01-29 (Sat) .. 2011-02-04 (Fri) -> wday 1,2,3,4,5,6,7
+    assert future["wday"].tolist() == [1, 2, 3, 4, 5, 6, 7]

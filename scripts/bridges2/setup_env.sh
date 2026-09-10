@@ -43,8 +43,11 @@ import sys
 
 # pandas/torch come from the base module; neuralforecast/dotenv/statsforecast/lightgbm are
 # this project's own additions (backtest.py/decision.py import all of models/{naive,statistical,
-# lightgbm_global} unconditionally, even when a script only uses naive + NBEATS).
-required = ["pandas", "torch", "neuralforecast", "dotenv", "statsforecast", "lightgbm"]
+# lightgbm_global} unconditionally, even when a script only uses naive + NBEATS). scipy is
+# decision.py's own direct import (scipy.stats.norm) -- not in pyproject.toml as a direct
+# dependency, only pulled in transitively today (via statsforecast) -- checked and installed
+# explicitly here so a future transitive-dependency change can't silently drop it.
+required = ["pandas", "torch", "neuralforecast", "dotenv", "statsforecast", "lightgbm", "scipy"]
 missing = [m for m in required if importlib.util.find_spec(m) is None]
 if missing:
     print("MISSING:", ", ".join(missing))
@@ -80,7 +83,7 @@ cp /opt/packages/AI/pytorch_26.05-py3/uv.lock .
 echo "Adding this project's own packages (one combined install, not several separate calls —"
 echo "multiple uv pip install calls in sequence risk the resolver silently dropping something"
 echo "already installed when reconciling a later call)..."
-"$UV_BIN" pip install --cache-dir "$CACHE_DIR" neuralforecast python-dotenv statsforecast lightgbm
+"$UV_BIN" pip install --cache-dir "$CACHE_DIR" neuralforecast python-dotenv statsforecast lightgbm scipy
 
 echo ""
 echo "Verifying final environment..."

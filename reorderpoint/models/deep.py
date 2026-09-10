@@ -53,6 +53,19 @@ class NBEATSModel:
     ) -> pd.DataFrame:
         if self._nf is None:
             raise RuntimeError("call fit() before predict_quantiles()")
+        # neuralforecast's predict() always returns exactly the h it was fit with — unlike
+        # LightGBMGlobalModel's recursive rollout, it can't natively serve a different horizon
+        # per call. serve.py/dashboard.py call predict_quantiles twice on the same cached model
+        # instance with genuinely different horizons (the main forecast, and lead_time_days for
+        # the reorder decision) — silently ignoring `horizon` here would return the wrong-length
+        # forecast for whichever call didn't match fit time. Serve a shorter request by
+        # truncating; fail clearly on a longer one rather than return the wrong length.
+        if horizon > self._horizon:
+            raise ValueError(
+                f"NBEATSModel was fit with horizon={self._horizon}; cannot serve "
+                f"predict_quantiles(horizon={horizon}) without refitting."
+            )
+
         forecast = self._nf.predict()
         out = forecast.rename(columns={"unique_id": "series_id", "ds": "date"})[
             ["series_id", "date"]
@@ -66,6 +79,10 @@ class NBEATSModel:
         out["p10"] = p10
         out["p50"] = p50
         out["p90"] = p90
+
+        if horizon < self._horizon:
+            out = out.sort_values(["series_id", "date"])
+            out = out.groupby("series_id", group_keys=False).head(horizon)
         return out
 
 

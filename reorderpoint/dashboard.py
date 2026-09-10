@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+from fastapi import HTTPException
 
 from reorderpoint import decision as dec
 from reorderpoint import monitor as mon
@@ -46,7 +47,15 @@ def main() -> None:
         return
 
     panel = get_history()
-    model = get_model()
+    try:
+        model = get_model()
+    except HTTPException as exc:
+        # get_model() is shared with serve.py's FastAPI dependency injection, where raising
+        # HTTPException is correct — but Streamlit doesn't know what to do with it (a TOCTOU
+        # race after the MODEL_PATH.exists() check above would otherwise surface as a raw,
+        # unhandled exception instead of the same graceful message that check already gives).
+        st.error(exc.detail)
+        return
     config = load_config()
     lead_time_days = config.costs.lead_time_days
 

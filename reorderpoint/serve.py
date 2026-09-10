@@ -62,7 +62,9 @@ def future_exog_from_trailing_window(
         trailing = trailing.iloc[:horizon].copy()
         trailing["date"] = future_dates
         if "wday" in trailing.columns:
-            trailing["wday"] = trailing["date"].dt.dayofweek + 1
+            # M5's wday convention is Saturday=1..Friday=7 (confirmed against calendar.csv),
+            # not pandas' Monday=0 dayofweek — the model was trained on the former.
+            trailing["wday"] = ((trailing["date"].dt.dayofweek + 2) % 7) + 1
         if "month" in trailing.columns:
             trailing["month"] = trailing["date"].dt.month
         if "year" in trailing.columns:
