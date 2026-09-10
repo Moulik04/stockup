@@ -21,7 +21,10 @@ naive policy on simulated dollars, not just accuracy.
 
 - **Track A (public, in this repo):** [M5 Forecasting](https://www.kaggle.com/c/m5-forecasting-accuracy) — Walmart daily unit sales, hierarchical (item × store × dept × category × state).
 - **Track B (private):** a real small-business SKU-level sales history, run through the identical
-  pipeline via a config switch. Never committed; results reported in aggregate only.
+  pipeline via a config switch. Never committed; results reported in aggregate only. The loader
+  (`load_track_b`) is implemented and schema-tested against a fixture matching the documented
+  contract (`data/track_b/README.md`) — the real export hasn't been provided yet, so there's no
+  Track B case study in this README (yet). Everything else in this repo runs on Track A alone.
 
 See [`docs/data.md`](docs/data.md).
 
@@ -189,3 +192,66 @@ price, or SNAP features, unlike LightGBM's feature pipeline. Extending it to con
 exogenous signals is a real feature-engineering project of its own, deliberately out of scope for
 a stretch phase (see `docs/bridges2.md`). Some of the accuracy gap, and possibly some of the cost
 gap, could reflect that feature disparity rather than architecture alone.
+
+## Ablations
+
+One lever changed at a time, each measured on the real 400-series/4-fold backtest — not a priori
+guesses.
+
+| what changed | before | after | effect |
+|---|---|---|---|
+| Safety-stock sizing: model's own P10/P90 width → empirical realised-residual std | LightGBM $13,199/fold, SeasonalNaive $11,978/fold — **LightGBM loses** despite winning on accuracy | LightGBM $14,543/fold, SeasonalNaive $15,224/fold — **LightGBM wins** | Every model's cost rose (the old method under-provisioned safety stock across the board), but the ranking flipped to match accuracy — the fix, not a coincidence |
+| LightGBM quantile nominal alpha: 0.10/0.90 → 0.13/0.87 | 85.6% coverage (misses the ±5-point bar around 80% nominal) | 81.2% coverage (clears it) | MASE unchanged — this was purely a P10/P90 spread fix, diagnosed from the miscalibration's direction, not a blind sweep |
+| Hierarchical reconciliation: none → BottomUp | item MASE 1.329 (base) | 1.329 (BottomUp, +0.0%) at the bottom, but **+0.9% to +3.6% worse** at every aggregate level above it | A naive sum of noisy bottom-level forecasts inherits their noise going up the tree — not recommended |
+| Hierarchical reconciliation: none → MinTrace | same base | **-0.10% to -0.12%** at the two most granular levels, +0.06% to +1.07% (roughly neutral) elsewhere | Covariance-weighted blending helps modestly where it should, unlike naive BottomUp |
+| Model family: per-series statistical (AutoETS/AutoTheta) → global LightGBM | best baseline MASE 1.529 (AutoTheta), all baselines miss the coverage bar by 12-22 points | LightGBM MASE 1.587 (only 4% worse) but the *only* model clearing the coverage bar (81.2%) | Global model wins on the metric that actually matters for the decision layer, not the one that looks best in isolation |
+| Architecture: global LightGBM (featured) → NBEATS (univariate deep) | LightGBM MASE 1.587, $14,543/fold | NBEATS MASE 1.108 (best in the project), $17,209/fold (worst at the decision layer) | The sharpest accuracy/cost split in the project — see Phase 7 above |
+
+## Where it fails
+
+- **Intermittent demand is the hard case, consistently.** Series with >50% zero-sale training days
+  score far worse than the rest under every model tested: AutoTheta (Phase 2) MASE 1.612 vs. 0.777;
+  NBEATS (Phase 7) 1.150 vs. 0.732. This is the central justification for LightGBM's Tweedie
+  objective over continuing with per-series statistical methods, and it never fully goes away.
+- **New items are common, not an edge case.** 3,056 of 5,650 series (54%) have their first nonzero
+  sale more than 90 days into the panel (`reports/eda.md`) — genuine cold-start series the model
+  has to handle as a matter of course, not a rare exception worth a footnote.
+- **No model hits the stated service-level target.** Every model this project has evaluated at the
+  decision layer — LightGBM 81.5%, AutoETS 80.7%, AutoTheta 81.1%, MovingAverage 80.7%,
+  SeasonalNaive 83.2%, NBEATS 71.5% — falls short of the 95% `service_level_target` fill rate. The
+  safety-stock formula's normal-distribution approximation (`docs/decision.md`) is the likely
+  systemic cause on this right-skewed, spiky demand — not an isolated bug in any one model. Flagged
+  as an open problem, not silently accepted.
+- **`y` is a demand proxy, not demand.** Units sold under-counts true demand whenever a SKU was
+  actually out of stock (stockout censoring) — no correction is applied in v1 (`docs/data.md`).
+  Every accuracy and cost number in this README inherits that limitation.
+- **The M5 subset is HOBBIES only, not the full catalog.** Headline numbers come from a
+  400-series sample of the HOBBIES category specifically (chosen as the smallest of M5's three
+  top-level categories, for fast local iteration) — Phase 5's reconciliation experiment is the only
+  place the full 30,490-series, 3-category panel gets exercised.
+
+## What I'd do with a budget
+
+- **Empirical or skewed safety-stock sizing**, replacing the current `z · σ` normal approximation
+  — the single highest-leverage fix given every model misses the 95% service-level target. A
+  quantile-based or bootstrapped lead-time-demand distribution, rather than a symmetric one, is the
+  natural next step (see "Where it fails").
+- **Exogenous features for NBEATS.** The Phase 7 comparison is confounded by feature richness, not
+  just architecture — LightGBM sees price/calendar/SNAP, NBEATS sees none. `neuralforecast`
+  supports `futr_exog_list`/`hist_exog_list`; wiring the same feature set in would make the
+  accuracy/cost comparison a cleaner test of architecture alone.
+- **The full M5 catalog, not just HOBBIES.** Would need either more RAM (this dev machine caps out
+  around 8.6GB — the full panel's 58M rows is a real memory ceiling, worked around in Phase 5 via
+  parquet predicate pushdown rather than loading it all at once) or a cloud instance, which
+  conflicts with the zero-cost constraint this project holds to by design. A modest paid tier (or a
+  larger free-tier instance) would remove that ceiling.
+- **The official M5 WRMSSE**, not this project's simplified single-level revenue-weighted RMSSE —
+  the full 12-level hierarchical metric is real machinery in its own right, natural to build out
+  alongside a genuine Phase 5 hierarchy rather than the smallest 2-store slice used here.
+- **Direct multi-horizon training for LightGBM**, instead of the current recursive rollout (predict
+  day 1, feed it back as day 2's lag feature, and so on) — would remove the compounding-error
+  property recursive forecasting has, at the cost of an expanded training set (28x rows, one per
+  origin/horizon-step pair).
+- **A real demand-censoring correction.** `y` (units sold) under-counts true demand during
+  stockouts; Track B's `on_hand` field, once available, could support inferring when that's
+  happening and correcting for it — not attempted in v1.
