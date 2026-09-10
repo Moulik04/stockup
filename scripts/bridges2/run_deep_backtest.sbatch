@@ -15,9 +15,18 @@ source /ocean/projects/$PSC_ALLOCATION/$USER/stockup-env/.venv/bin/activate
 
 cd "$SLURM_SUBMIT_DIR"
 
-# Same panel Phases 2-6 already used — download + ingest once if not already present.
+# Fail fast rather than burn GPU allocation time on an environment problem. This should never
+# actually trigger if `bash scripts/bridges2/setup_env.sh` was run (and passed) beforehand —
+# that's the real pre-flight check, since it runs on the login node with no GPU wait. This is a
+# belt-and-suspenders check, not a substitute for running setup_env.sh first.
+python3 -c "import pandas, torch, neuralforecast, dotenv, statsforecast, lightgbm" || {
+    echo "Environment is missing required packages — run scripts/bridges2/setup_env.sh first." >&2
+    exit 1
+}
+
+# Same panel Phases 2-6 already used — copied over separately, since it's gitignored.
 if [ ! -f data/track_a/processed/panel.parquet ]; then
-    echo "panel.parquet not found — run 'make data' (or copy it over) before this job."
+    echo "panel.parquet not found — copy it over (see docs/bridges2.md) before this job." >&2
     exit 1
 fi
 
