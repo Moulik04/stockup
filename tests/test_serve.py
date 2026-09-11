@@ -125,3 +125,31 @@ def test_future_exog_wday_matches_m5_convention():
 
     # 2011-01-29 (Sat) .. 2011-02-04 (Fri) -> wday 1,2,3,4,5,6,7
     assert future["wday"].tolist() == [1, 2, 3, 4, 5, 6, 7]
+
+
+def test_future_exog_day_one_is_consistent_across_horizons():
+    # Regression test: an earlier version sized its reference window to `horizon` itself
+    # (group.tail(horizon)), so day 1's proxy price silently changed depending on how many days
+    # were requested -- a different historical day became "day 1 of the template" for every
+    # horizon length. Each day gets a distinct price so any such shift is directly observable.
+    dates = pd.date_range("2020-01-01", periods=40, freq="D")
+    panel = pd.DataFrame(
+        {
+            "series_id": ["A"] * len(dates),
+            "date": dates,
+            "y": [1.0] * len(dates),
+            "price": [float(i) for i in range(len(dates))],  # every day has a unique price
+        }
+    )
+
+    for horizon in (7, 14, 28):
+        future = serve.future_exog_from_trailing_window(panel, ["A"], horizon)
+        future = future.sort_values("date")
+        day_one_price = future.iloc[0]["price"]
+        if horizon == 7:
+            reference_price = day_one_price
+        else:
+            assert day_one_price == reference_price, (
+                f"day 1 price changed with horizon={horizon}: "
+                f"{day_one_price} != {reference_price}"
+            )
