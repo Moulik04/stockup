@@ -1,4 +1,4 @@
-FROM python:3.12-slim AS base
+FROM python:3.13-slim AS base
 
 # LightGBM's OpenMP runtime — same libomp dependency the README flags for macOS dev (Homebrew),
 # here as the Debian package (`libgomp1`) instead.
