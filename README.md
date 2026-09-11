@@ -63,29 +63,29 @@ raw data → ingest → canonical long table → feature pipeline (point-in-time
 
 **Accuracy (Phases 2–3)** — Track A, HOBBIES category, 400-series subsample, 4 rolling-origin
 folds, 28-day horizon. Full table and methodology in
-[`reports/backtest_2026-09-03.md`](reports/backtest_2026-09-03.md).
+[`reports/backtest_2026-09-10.md`](reports/backtest_2026-09-10.md).
 
 | model | MASE | RMSSE | coverage (nominal 80%) |
 |---|---|---|---|
-| AutoTheta | 1.529 | 0.823 | 61.6% |
+| AutoTheta | 1.524 | 0.822 | 62.9% |
 | MovingAverage | 1.530 | 0.820 | 62.2% |
-| AutoETS | 1.532 | 0.814 | 63.3% |
+| AutoETS | 1.530 | 0.814 | 63.6% |
 | **LightGBM** | **1.587** | 0.823 | **81.2%** |
 | SeasonalNaive | 1.633 | 1.088 | 73.2% |
 
 LightGBM beats seasonal naive on MASE in 4/4 folds and is the only model that clears the ±5-point
 quantile-coverage bar (81.2% vs. 80% nominal) — the statistical baselines' P10/P90 bands are all
-12–22 points too narrow (see the report's "Quantile calibration" section).
+7–18 points too narrow (see the report's "Quantile calibration" section).
 
 **Decision-layer cost simulation (Phase 4)** — same folds/models, run through the newsvendor
 policy in [`docs/decision.md`](docs/decision.md) and a lost-sales (s, S) inventory simulation.
-Full table in [`reports/decision_2026-09-05.md`](reports/decision_2026-09-05.md).
+Full table in [`reports/decision_2026-09-10.md`](reports/decision_2026-09-10.md).
 
 | model | mean total cost / fold | holding cost | stockout cost | fill rate |
 |---|---|---|---|---|
 | **LightGBM** | **$14,543** | $7,225 | $7,318 | 81.5% |
-| AutoETS | $14,730 | $7,097 | $7,633 | 80.7% |
-| AutoTheta | $14,831 | $7,383 | $7,448 | 81.1% |
+| AutoETS | $14,726 | $7,104 | $7,623 | 80.7% |
+| AutoTheta | $14,830 | $7,395 | $7,435 | 81.2% |
 | MovingAverage | $14,914 | $7,291 | $7,624 | 80.7% |
 | SeasonalNaive | $15,224 | $8,582 | $6,642 | 83.2% |
 
