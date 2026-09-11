@@ -1,6 +1,6 @@
 # Deliberate dark theme, not Streamlit's default — colors match the palette validated in
 # dataviz's palette.md reference (categorical slot 1 blue, dark-mode surfaces). See
-# reorderpoint/dashboard.py's design mockup discussion in DECISIONS.md.
+# reorderpoint/dashboard.py's module docstring for the design rationale.
 [theme]
 base = "dark"
 primaryColor = "#3987e5"

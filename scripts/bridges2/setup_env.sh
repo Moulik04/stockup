@@ -15,12 +15,15 @@
 # can't go missing later regardless of what sourcing activate/deactivate does to PATH.
 #
 # Run from a Bridges-2 login node (via the OnDemand web shell or ssh):
+#   export PSC_ALLOCATION=<your project allocation ID, e.g. from the OnDemand balance banner>
 #   bash scripts/bridges2/setup_env.sh
 
 set -euo pipefail
 
-VENV_DIR=/ocean/projects/$PSC_ALLOCATION/$USER/stockup-env
-CACHE_DIR=/ocean/projects/$PSC_ALLOCATION/$USER/uv_cache
+: "${PSC_ALLOCATION:?Set PSC_ALLOCATION to your Bridges-2 project allocation ID first.}"
+
+VENV_DIR="/ocean/projects/${PSC_ALLOCATION}/${USER}/stockup-env"
+CACHE_DIR="/ocean/projects/${PSC_ALLOCATION}/${USER}/uv_cache"
 PY_INTERP=/opt/packages/uv/python/cpython-3.13.7-linux-x86_64-gnu
 
 module load pytorch/26.05-2.11-py3
