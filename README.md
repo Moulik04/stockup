@@ -11,7 +11,9 @@ honest, leakage-free backtests. The output is a reorder table, not a chart.
 > FastAPI service, batch scoring, Docker image, CI, monitoring, and a Streamlit dashboard sit on
 > top of it (Phase 6) — see "Results" and [`docs/serving.md`](docs/serving.md).
 
-![Stockup operator dashboard — picking a series, the reorder decision, forecast fan chart, and history](docs/demo.gif)
+<p align="center">
+  <img src="docs/demo.gif" alt="Stockup operator dashboard — picking a series, the reorder decision, forecast fan chart, and history" width="600">
+</p>
 
 ## Why
 
