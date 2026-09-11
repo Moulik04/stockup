@@ -5,7 +5,13 @@ recommendation, backtest performance, and monitoring status. Reads the same prod
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+# `streamlit run reorderpoint/dashboard.py` executes this file as a direct script path, which
+# (like `python scripts/x.py`, see DECISIONS.md) does not add the repo root to sys.path the way
+# `-m`/`-c` do -- so `import reorderpoint` below would otherwise fail with ModuleNotFoundError.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pandas as pd
 import streamlit as st
