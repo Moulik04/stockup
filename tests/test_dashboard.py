@@ -22,7 +22,7 @@ def test_load_series_history_filters_and_trims_to_trailing_window():
     assert (out["date"] <= dates[-1]).all()
 
 
-def test_build_forecast_chart_data_indexes_by_date():
+def test_build_fan_chart_has_band_and_median_traces():
     forecast = pd.DataFrame(
         {
             "series_id": ["A", "A"],
@@ -32,9 +32,24 @@ def test_build_forecast_chart_data_indexes_by_date():
             "p90": [3.0, 4.0],
         }
     )
-    out = dash.build_forecast_chart_data(forecast)
-    assert list(out.columns) == ["p10", "p50", "p90"]
-    assert out.index.name == "date"
+    fig = dash.build_fan_chart(forecast)
+    assert len(fig.data) == 2
+    band, median = fig.data
+    assert band.fill == "toself"
+    assert list(median.y) == [2.0, 3.0]
+
+
+def test_build_history_chart_plots_actuals():
+    history = pd.DataFrame({"date": pd.to_datetime(["2020-01-01", "2020-01-02"]), "y": [4.0, 5.0]})
+    fig = dash.build_history_chart(history)
+    assert len(fig.data) == 1
+    assert list(fig.data[0].y) == [4.0, 5.0]
+
+
+def test_status_for_thresholds():
+    assert dash.status_for(0.05) == ("healthy", dash.GOOD)
+    assert dash.status_for(0.3) == ("watch", dash.WARNING)
+    assert dash.status_for(0.8) == ("reorder now", dash.CRITICAL)
 
 
 def test_latest_report_picks_most_recent_by_filename(tmp_path):

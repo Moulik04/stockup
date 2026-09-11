@@ -36,16 +36,24 @@ class ReorderRequest(BaseModel):
     on_hand: dict[str, float] = {}
 
 
+REFERENCE_WINDOW_DAYS = 7  # this project's weekly seasonality period (SEASON_LENGTH elsewhere)
+
+
 def future_exog_from_trailing_window(
     panel: pd.DataFrame, series_ids: list[str], horizon: int
 ) -> pd.DataFrame:
     """Production stand-in for real forward-looking exog (future calendar/events/price): repeats
-    each series' most recent `horizon`-day row pattern, with dates advanced past the panel's last
-    known date. Calendar fields that are genuinely knowable in advance (wday/month/year) are
-    recomputed from the real future dates rather than carried over stale; everything else (price,
-    events, SNAP) is a repeat-the-recent-pattern proxy — a real deployment would source these from
-    an actual pricing/promo/calendar system, the same kind of disclosed simplification as
-    y-as-demand-proxy in docs/data.md.
+    each series' most recent `REFERENCE_WINDOW_DAYS`-day row pattern, tiled to cover `horizon`,
+    with dates advanced past the panel's last known date. That reference window is a *fixed*
+    size, not sized to `horizon` itself — an earlier version used `group.tail(horizon)`, which
+    meant day 1's proxy price/event/SNAP values silently shifted depending on how many days were
+    requested (a different historical day became "day 1 of the template" for every horizon
+    length). With a fixed window, day 1 of any forecast always means the same thing. Calendar
+    fields that are genuinely knowable in advance (wday/month/year) are recomputed from the real
+    future dates rather than carried over stale; everything else (price, events, SNAP) is a
+    repeat-the-recent-pattern proxy — a real deployment would source these from an actual
+    pricing/promo/calendar system, the same kind of disclosed simplification as y-as-demand-proxy
+    in docs/data.md.
     """
     sub = panel[panel["series_id"].isin(series_ids)].sort_values(["series_id", "date"])
     last_date = panel["date"].max()
@@ -53,13 +61,11 @@ def future_exog_from_trailing_window(
 
     frames = []
     for series_id, group in sub.groupby("series_id"):
-        trailing = group.tail(horizon).reset_index(drop=True)
-        if trailing.empty:
+        reference = group.tail(REFERENCE_WINDOW_DAYS).reset_index(drop=True)
+        if reference.empty:
             continue
-        if len(trailing) < horizon:
-            reps = horizon // len(trailing) + 1
-            trailing = pd.concat([trailing] * reps, ignore_index=True)
-        trailing = trailing.iloc[:horizon].copy()
+        reps = horizon // len(reference) + 1
+        trailing = pd.concat([reference] * reps, ignore_index=True).iloc[:horizon].copy()
         trailing["date"] = future_dates
         if "wday" in trailing.columns:
             # M5's wday convention is Saturday=1..Friday=7 (confirmed against calendar.csv),

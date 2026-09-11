@@ -89,7 +89,16 @@ class LightGBMGlobalModel:
                 "category columns for the forecast dates (known in advance, not the target y)"
             )
 
-        history = self._history.copy()
+        # Scope history down to only the requested series before the recursive loop. Each
+        # series' lag/rolling features are computed independently in build_features (grouped by
+        # series_id, no cross-series leakage), so this changes nothing about the output — but it
+        # matters a lot for cost: the production model's self._history covers the entire training
+        # panel (all series fit on), and a live serving request typically asks for one or two.
+        # Recomputing features across the whole panel on every recursive step just to get one new
+        # row for the requested series is the difference between a dashboard click taking
+        # seconds vs. the better part of a minute.
+        requested_series = future_exog["series_id"].unique()
+        history = self._history[self._history["series_id"].isin(requested_series)].copy()
         forecast_dates = sorted(future_exog["date"].unique())
         rows_out = []
 
