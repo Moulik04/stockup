@@ -10,7 +10,7 @@ the statsforecast wrapper in models/base.py), not a `-q-10/50/90` naming.
 Unlike the recursive LightGBM rollout (models/lightgbm_global.py), NBEATS forecasts the full
 horizon directly in one `predict()` call — no feeding predictions back in as pseudo-history. It's
 also univariate here: no calendar/price/category exogenous features, unlike LightGBM's feature
-pipeline — a deliberate Phase 7 scoping choice (see DECISIONS.md), not an oversight.
+pipeline — a deliberate Phase 7 scoping choice, not an oversight.
 
 This module is only ever imported on Bridges-2 (never by backtest.py directly) — `neuralforecast`
 and `torch` aren't installed on the M2. See scripts/bridges2/run_deep_backtest.py.

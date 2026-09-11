@@ -10,8 +10,10 @@
 
 set -euo pipefail
 
+: "${PSC_ALLOCATION:?Set PSC_ALLOCATION to your Bridges-2 project allocation ID first.}"
+
 module load pytorch/26.05-2.11-py3
-source /ocean/projects/$PSC_ALLOCATION/$USER/stockup-env/.venv/bin/activate
+source "/ocean/projects/${PSC_ALLOCATION}/${USER}/stockup-env/.venv/bin/activate"
 
 cd "$SLURM_SUBMIT_DIR"
 

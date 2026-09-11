@@ -17,9 +17,9 @@ import sys
 from pathlib import Path
 
 # Run via `python3 scripts/bridges2/run_deep_backtest.py` (a direct script path, not `-m`), which
-# does not add the repo root to sys.path the way `-m`/`-c` do — see DECISIONS.md's "must not
-# import reorderpoint" entry for scripts/*.py. That rule is for standalone utilities; this script
-# genuinely needs the package, so it fixes up sys.path itself instead.
+# does not add the repo root to sys.path the way `-m`/`-c` do. Standalone utility scripts avoid
+# importing reorderpoint for this reason, but this script genuinely needs the package, so it
+# fixes up sys.path itself instead.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import pandas as pd

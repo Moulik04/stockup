@@ -2,10 +2,10 @@
 history, backtest performance, and monitoring status. Reads the same production artifacts
 `serve.py` does directly (not an HTTP client of the API) — see docs/serving.md.
 
-Layout/color design validated as a mockup first (DECISIONS.md, 2026-09-11) — reorder decision is
-the first thing shown (not buried below two charts, the original problem this redesign fixes),
-and colors match dataviz's validated palette reference (categorical slot 1 blue, the fixed
-good/warning/critical status triad), not hand-picked.
+Layout/color design validated as a mockup first — reorder decision is the first thing shown (not
+buried below two charts, the original problem this redesign fixes), and colors match dataviz's
+validated palette reference (categorical slot 1 blue, the fixed good/warning/critical status
+triad), not hand-picked.
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ import sys
 from pathlib import Path
 
 # `streamlit run reorderpoint/dashboard.py` executes this file as a direct script path, which
-# (like `python scripts/x.py`, see DECISIONS.md) does not add the repo root to sys.path the way
-# `-m`/`-c` do -- so `import reorderpoint` below would otherwise fail with ModuleNotFoundError.
+# (like `python scripts/x.py`) does not add the repo root to sys.path the way `-m`/`-c` do -- so
+# `import reorderpoint` below would otherwise fail with ModuleNotFoundError.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pandas as pd
@@ -56,7 +56,7 @@ def latest_report(reports_dir: Path, prefix: str) -> Path | None:
     `backtest_deep_2026-09-10.md` (the narrower Phase 7 NBEATS-only report), and "deep" sorts
     lexicographically after any 4-digit year, so a wildcard glob would silently pick that report
     instead of the comprehensive one — confirmed happening in a real dashboard screenshot before
-    this fix (see DECISIONS.md, 2026-09-11).
+    this fix.
     """
     candidates = sorted(reports_dir.glob(f"{prefix}_????-??-??.md"))
     return candidates[-1] if candidates else None
@@ -211,8 +211,7 @@ def main() -> None:
     )
 
     # Reorder decision first — the thing this whole project produces, not the last thing on the
-    # page after two charts (see DECISIONS.md, 2026-09-11: the original demo recording never
-    # scrolled far enough to show it).
+    # page after two charts (the original demo recording never scrolled far enough to show it).
     lead_time_exog = future_exog_from_trailing_window(panel, [series_id], lead_time_days)
     lead_time_preds = model.predict_quantiles(lead_time_days, future_exog=lead_time_exog)
     decisions = dec.compute_decisions(

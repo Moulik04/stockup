@@ -1,7 +1,7 @@
 FROM python:3.12-slim AS base
 
-# LightGBM's OpenMP runtime — same libomp dependency noted for macOS dev in DECISIONS.md/README,
-# here as the Debian package (`libgomp1`) instead of Homebrew's.
+# LightGBM's OpenMP runtime — same libomp dependency the README flags for macOS dev (Homebrew),
+# here as the Debian package (`libgomp1`) instead.
 RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 

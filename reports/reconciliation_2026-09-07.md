@@ -1,6 +1,6 @@
 # Hierarchical reconciliation report — 2026-09-07
 
-Track A (M5), stores CA_1, TX_1 (full state/store/category/department hierarchy under them), 400-series bottom-level subsample (seed=0). 4 rolling-origin folds, horizon=28 days, base model=AutoETS. Bottom-up and MinTrace (shrinkage) via `hierarchicalforecast` — see docs/decision.md's sibling design note in DECISIONS.md for the simplified (nested, not grouped) hierarchy this uses.
+Track A (M5), stores CA_1, TX_1 (full state/store/category/department hierarchy under them), 400-series bottom-level subsample (seed=0). 4 rolling-origin folds, horizon=28 days, base model=AutoETS. Bottom-up and MinTrace (shrinkage) via `hierarchicalforecast`, using a nested (not the official grouped) hierarchy — `item_id` already determines `dept_id`/`cat_id`, so the `state_id → store_id → cat_id → dept_id → item_id` chain has no double-counting and its bottom level matches this project's own `series_id` exactly.
 
 ## Mean MASE by level and reconciliation method
 

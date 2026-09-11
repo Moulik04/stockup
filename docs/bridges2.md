@@ -2,8 +2,10 @@
 
 Deep model (N-BEATS via `neuralforecast`) on Bridges-2's V100 GPUs, fp16 only — V100 (Volta)
 doesn't support bf16 tensor cores or FlashAttention's fused kernels properly, so both are
-explicitly avoided. Everything below is verified against the real cluster (account `$USER`,
-allocation `$PSC_ALLOCATION`, GPU balance ~481/500 SU), not assumed from generic docs.
+explicitly avoided. Everything below is verified against the real cluster (a PSC account with a
+~500 SU GPU allocation), not assumed from generic docs. Scripts reference `$USER` and a
+`PSC_ALLOCATION` env var rather than a hardcoded account/allocation — set the latter to your own
+project's allocation ID before running anything.
 
 ## Access
 
@@ -40,14 +42,15 @@ confirmed via `sinfo -N -p GPU-shared -o "%N %G"`:
 other packages — but it's a **read-only** `uv`-managed environment (confirmed: `uv pip install`
 into it fails with `EACCES`). The module's own docs suggest cloning it via `cd $LOCAL; uv venv
 ...`, but `$LOCAL` doesn't survive between job submissions, so `scripts/bridges2/setup_env.sh`
-does the same clone into `/ocean/projects/$PSC_ALLOCATION/$USER/stockup-env` instead — built once,
-reused by every later job.
+does the same clone into `/ocean/projects/$PSC_ALLOCATION/$USER/stockup-env` instead — built
+once, reused by every later job.
 
 **One-time setup** (from a Bridges-2 shell — OnDemand web shell or `ssh`):
 
 ```bash
 git clone https://github.com/Moulik04/stockup.git   # or `git pull` if already cloned
 cd stockup
+export PSC_ALLOCATION=<your project allocation ID, e.g. from the OnDemand balance banner>
 bash scripts/bridges2/setup_env.sh
 ```
 

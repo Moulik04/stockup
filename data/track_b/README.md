@@ -1,7 +1,7 @@
 # Track B — private business data
 
 This directory never holds real data (see repo `.gitignore`). It documents the schema the
-pipeline expects so MJ can export the business's sales history into a matching shape.
+pipeline expects so the business's sales history can be exported into a matching shape.
 
 ## Expected file
 
@@ -28,5 +28,4 @@ Weekly is also supported if that's what's available — set it in config once re
 - Fewer, shorter series than Track A (single business vs. thousands of Walmart series).
 - Possible zero-inflated or missing months (stockouts, seasonal closures, new SKUs).
 
-This file will be revised once a real export is available and the schema is confirmed —
-see `DECISIONS.md`.
+This file will be revised once a real export is available and the schema is confirmed.
