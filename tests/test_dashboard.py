@@ -61,5 +61,16 @@ def test_latest_report_picks_most_recent_by_filename(tmp_path):
     assert result == tmp_path / "backtest_2026-09-05.md"
 
 
+def test_latest_report_ignores_deep_variant_even_though_it_sorts_later(tmp_path):
+    # Regression test: a wildcard glob (backtest_*.md) also matches backtest_deep_*.md (the
+    # narrower Phase 7 NBEATS-only report), and "deep" sorts lexicographically after any 4-digit
+    # year -- confirmed picking the wrong report on a real dashboard screenshot before this fix.
+    (tmp_path / "backtest_2026-09-10.md").write_text("comprehensive")
+    (tmp_path / "backtest_deep_2026-09-10.md").write_text("nbeats only")
+
+    result = dash.latest_report(tmp_path, "backtest")
+    assert result == tmp_path / "backtest_2026-09-10.md"
+
+
 def test_latest_report_returns_none_when_missing(tmp_path):
     assert dash.latest_report(tmp_path, "backtest") is None

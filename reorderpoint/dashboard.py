@@ -50,8 +50,15 @@ def load_series_history(panel: pd.DataFrame, series_id: str, days: int = 90) -> 
 
 
 def latest_report(reports_dir: Path, prefix: str) -> Path | None:
-    """Most recent `reports/<prefix>_<date>.md` by filename (dates sort lexicographically)."""
-    candidates = sorted(reports_dir.glob(f"{prefix}_*.md"))
+    """Most recent `reports/<prefix>_<date>.md` by filename (dates sort lexicographically).
+
+    The glob is date-shaped (`????-??-??`), not `*` — `backtest_*.md` also matches
+    `backtest_deep_2026-09-10.md` (the narrower Phase 7 NBEATS-only report), and "deep" sorts
+    lexicographically after any 4-digit year, so a wildcard glob would silently pick that report
+    instead of the comprehensive one — confirmed happening in a real dashboard screenshot before
+    this fix (see DECISIONS.md, 2026-09-11).
+    """
+    candidates = sorted(reports_dir.glob(f"{prefix}_????-??-??.md"))
     return candidates[-1] if candidates else None
 
 
