@@ -1,4 +1,4 @@
-.PHONY: setup data data-full eda backtest decide reconcile train score serve dashboard test lint format
+.PHONY: setup data data-full eda backtest divergence decide reconcile train score serve dashboard test lint format
 
 setup:
 	uv sync
@@ -21,6 +21,10 @@ eda:
 
 backtest:
 	uv run python -m reorderpoint.backtest
+
+# Reruns the backtest's forecasts once and caches them (data/track_a/processed/backtest_forecasts.parquet)
+divergence:
+	uv run python -m reorderpoint.divergence
 
 decide:
 	uv run python -m reorderpoint.decision
