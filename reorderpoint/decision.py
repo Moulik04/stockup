@@ -222,6 +222,10 @@ class SimResult:
     turns: float
     cycles: int
     stockout_cycles: int
+    orders: int
+    order_qty_total: float
+    order_qty_sq_total: float
+    orders_below_one_unit: int
 
 
 def simulate_series(
@@ -256,6 +260,13 @@ def simulate_series(
     stockout_cycles = 0
     cycle_open = False
     cycle_had_stockout = False
+    # Realised order quantities. The fill-rate formula treats Q as a fixed lot size; under S = s
+    # it is actually the variable undershoot below the reorder point, so its dispersion is
+    # measured rather than assumed (see docs/decision.md, "How well does Q behave?").
+    orders = 0
+    order_qty_total = 0.0
+    order_qty_sq_total = 0.0
+    orders_below_one_unit = 0
     n = len(demand)
 
     for day in range(n):
@@ -287,6 +298,10 @@ def simulate_series(
                 pending = (day + lead_time_days, qty)
                 cycle_open = True
                 cycle_had_stockout = False
+                orders += 1
+                order_qty_total += qty
+                order_qty_sq_total += qty * qty
+                orders_below_one_unit += int(qty < 1.0)
 
     avg_on_hand = on_hand_sum / n if n else 0.0
     fill_rate = shipped / demanded if demanded > 0 else 1.0
@@ -303,6 +318,10 @@ def simulate_series(
         turns=turns,
         cycles=cycles,
         stockout_cycles=stockout_cycles,
+        orders=orders,
+        order_qty_total=order_qty_total,
+        order_qty_sq_total=order_qty_sq_total,
+        orders_below_one_unit=orders_below_one_unit,
     )
 
 
@@ -437,7 +456,14 @@ def _simulate_policy(
             unit_cost=unit_cost,
             costs=costs,
         )
-        sim_rows.append({"series_id": series_id, **result.__dict__})
+        sim_rows.append(
+            {
+                "series_id": series_id,
+                **result.__dict__,
+                "lead_time_std": float(drow["std"]),
+                "reorder_point": s,
+            }
+        )
 
     detail = pd.DataFrame(sim_rows)
     total_demanded = detail["units_demanded"].sum()
@@ -464,6 +490,7 @@ def _simulate_policy(
         # policy this is just z; for the fill-rate policy it varies per series with σ_LT/Q, and
         # comparing the two is what says which policy actually provisions more.
         "mean_safety_factor": _mean_safety_factor(decisions),
+        **_order_quantity_stats(detail),
     }
     return row, detail
 
@@ -471,6 +498,43 @@ def _simulate_policy(
 def _mean_safety_factor(decisions: pd.DataFrame) -> float:
     std = decisions["std"].replace(0, np.nan)
     return float((decisions["safety_stock"] / std).mean(skipna=True))
+
+
+def _order_quantity_stats(detail: pd.DataFrame) -> dict[str, float]:
+    """Realised Q: the undershoot actually ordered, pooled over every order placed.
+
+    The fill-rate relationship `β = 1 − σ_LT·G(k)/Q` is derived for a *fixed* lot size Q. Under
+    S = s there is no lot size — Q is whatever deficit accumulated since the last order — so how
+    badly that assumption is violated is an empirical question, and these are the numbers that
+    answer it. `q_cv` is the coefficient of variation of Q across orders; a CV anywhere near 1
+    means the formula's Q is a summary of a distribution too spread out for a single number to
+    stand in for.
+    """
+    total_orders = float(detail["orders"].sum())
+    if total_orders <= 0:
+        return {
+            "q_mean": np.nan,
+            "q_cv": np.nan,
+            "q_frac_below_one": np.nan,
+            "sigma_over_q": np.nan,
+        }
+
+    q_mean = detail["order_qty_total"].sum() / total_orders
+    q_var = detail["order_qty_sq_total"].sum() / total_orders - q_mean**2
+    q_cv = np.sqrt(max(q_var, 0.0)) / q_mean if q_mean > 0 else np.nan
+
+    ordered = detail[detail["orders"] > 0]
+    per_series_q = ordered["order_qty_total"] / ordered["orders"]
+    ratio = (ordered["lead_time_std"] / per_series_q.replace(0, np.nan)).replace(
+        [np.inf, -np.inf], np.nan
+    )
+    return {
+        "q_mean": float(q_mean),
+        "q_cv": float(q_cv),
+        "q_frac_below_one": float(detail["orders_below_one_unit"].sum() / total_orders),
+        # median, not mean: a handful of near-zero-Q series would otherwise dominate the average
+        "sigma_over_q": float(ratio.median(skipna=True)),
+    }
 
 
 def _bootstrap_lead_time_std(
@@ -729,18 +793,72 @@ def _service_measure_section(results: pd.DataFrame, costs: CostParams) -> list[s
             f"stock, because at this panel's σ_LT/Q the loss function says a {target:.0%} fill "
             f"rate is the {'weaker' if fr_k < z else 'stronger'} of the two targets. The formula "
             f"predicts {target:.0%}; the simulation delivers {mean_fr_fill:.1%}. That "
-            f"{(target - mean_fr_fill) * 100:.0f}-percentage-point gap is the finding: the "
-            f"normal-approximation loss "
-            f"function badly overstates achievable fill rate on right-skewed, spiky intermittent "
-            f"demand, so sizing safety stock *directly* from it is worse than the cruder z · σ "
-            f"rule it was meant to improve on.",
+            f"{(target - mean_fr_fill) * 100:.0f}-percentage-point gap between promise and "
+            f"delivery is the finding — but see the next section before attributing all of it to "
+            f"distributional shape.",
             "",
             "Both policies are kept and both are reported — a negative result on the more "
             "theoretically correct policy is the informative part, not something to tune away. "
             "The CSL policy stays the default for `make decide` and the serving path.",
             "",
+            *_order_quantity_section(results, target, mean_fr_fill),
         ]
     return lines
+
+
+def _order_quantity_section(results: pd.DataFrame, target: float, mean_fr_fill: float) -> list[str]:
+    """How badly the fixed-lot-size assumption behind the fill-rate formula is violated here."""
+    if "q_cv" not in results.columns:
+        return []
+    fr = results[results["policy"] == "fill_rate"]
+    q_mean = fr["q_mean"].mean()
+    q_cv = fr["q_cv"].mean()
+    q_low = fr["q_frac_below_one"].mean()
+    ratio = fr["sigma_over_q"].mean()
+
+    dispersed = q_cv >= 0.5
+    spread = "more than its own mean" if q_cv >= 1 else "a large fraction of its own mean"
+    sub_unit = (
+        f", and {q_low:.0%} of orders are for less than a single unit" if q_low >= 0.005 else ""
+    )
+    verdict = (
+        (
+            f"Q is **not** a well-behaved lot size here: its coefficient of variation across "
+            f"orders is {q_cv:.2f}{sub_unit}. "
+            f"A formula derived for a fixed Q is being handed a quantity that varies by "
+            f"{spread}, so **part of the "
+            f"{(target - mean_fr_fill) * 100:.0f}-point miss is misapplication of the formula, "
+            f"not evidence about the shape of the demand distribution.** How much of it splits "
+            f"which way is not separable from these runs alone."
+        )
+        if dispersed
+        else (
+            f"Q is reasonably well-behaved (CV {q_cv:.2f}), so the fixed-lot-size assumption is "
+            f"not badly violated and the "
+            f"{(target - mean_fr_fill) * 100:.0f}-point miss is better attributed to "
+            f"distributional shape than to formula misapplication."
+        )
+    )
+
+    return [
+        "### How well does Q behave?",
+        "",
+        "`β = 1 − σ_LT·G(k)/Q` is derived for a **fixed lot size** Q. This project sets S = s, so "
+        "there is no lot size — Q is whatever deficit accumulated since the last order. Measured "
+        "over every order the fill-rate policy placed:",
+        "",
+        f"- mean realised Q: **{q_mean:.2f} units**",
+        f"- coefficient of variation of Q: **{q_cv:.2f}**",
+        f"- orders for less than one unit: **{q_low:.0%}**",
+        f"- median realised σ_LT/Q: **{ratio:.2f}**",
+        "",
+        verdict,
+        "",
+        "The cycle-service-level result in the previous section is unaffected by any of this — "
+        "`z · σ_LT` makes no lot-size assumption — and remains the primary evidence that the "
+        "policy misses the target it was sized for.",
+        "",
+    ]
 
 
 def main() -> None:

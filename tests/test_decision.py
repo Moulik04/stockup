@@ -489,3 +489,60 @@ def test_fill_rate_policy_vs_csl_policy_depends_on_the_sigma_to_q_ratio():
 
     assert fr.loc["moderate", "reorder_point"] < csl.loc["moderate", "reorder_point"]
     assert fr.loc["spiky", "reorder_point"] > csl.loc["spiky", "reorder_point"]
+
+
+def test_simulate_series_records_realised_order_quantities():
+    # s=S=8, start 8. day0 demand 5 -> on_hand 3, order 5 placed (arrives day 2).
+    # day2 order lands -> on_hand 8; day3 demand 2 -> on_hand 6 < 8, order 2 placed.
+    demand = np.array([5.0, 0.0, 0.0, 2.0])
+    result = dec.simulate_series(
+        demand, s=8.0, S=8.0, on_hand_start=8.0, lead_time_days=2, unit_cost=1.0, costs=_costs()
+    )
+    assert result.orders == 2
+    assert result.order_qty_total == pytest.approx(7.0)  # 5 + 2
+    assert result.order_qty_sq_total == pytest.approx(29.0)  # 25 + 4
+    assert result.orders_below_one_unit == 0
+
+
+def test_simulate_series_flags_sub_unit_orders():
+    # A reorder point just above on-hand produces a fractional order — the regime that makes Q a
+    # poor stand-in for a lot size on intermittent demand.
+    demand = np.array([0.5, 0.0, 0.0])
+    result = dec.simulate_series(
+        demand, s=1.0, S=1.0, on_hand_start=1.0, lead_time_days=2, unit_cost=1.0, costs=_costs()
+    )
+    assert result.orders == 1
+    assert result.orders_below_one_unit == 1
+
+
+def test_order_quantity_stats_pooled_over_orders():
+    detail = pd.DataFrame(
+        {
+            # series A: 2 orders of total 10 (sq 50 -> 5 and 5); series B: 1 order of 20
+            "orders": [2, 1],
+            "order_qty_total": [10.0, 20.0],
+            "order_qty_sq_total": [50.0, 400.0],
+            "orders_below_one_unit": [1, 0],
+            "lead_time_std": [10.0, 10.0],
+        }
+    )
+    stats = dec._order_quantity_stats(detail)
+    assert stats["q_mean"] == pytest.approx(10.0)  # 30 units / 3 orders
+    assert stats["q_frac_below_one"] == pytest.approx(1 / 3)
+    # per-series mean Q is 5 (A) and 20 (B) -> sigma/Q of 2.0 and 0.5 -> median 1.25
+    assert stats["sigma_over_q"] == pytest.approx(1.25)
+
+
+def test_order_quantity_stats_with_no_orders_is_nan_not_zero():
+    detail = pd.DataFrame(
+        {
+            "orders": [0],
+            "order_qty_total": [0.0],
+            "order_qty_sq_total": [0.0],
+            "orders_below_one_unit": [0],
+            "lead_time_std": [5.0],
+        }
+    )
+    stats = dec._order_quantity_stats(detail)
+    assert np.isnan(stats["q_mean"])
+    assert np.isnan(stats["q_cv"])

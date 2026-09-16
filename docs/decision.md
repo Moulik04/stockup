@@ -134,6 +134,14 @@ estimated per series as its expected lead-time demand), rather than reading `z` 
 quantile. `reorder_point = lead_time_mean + k · σ_LT` exactly as before — only the safety factor
 changes.
 
+**Caveat on the fill-rate formula.** `β = 1 − σ_LT·G(k)/Q` is derived for a *fixed lot size* Q.
+Under `S = s` there is no lot size — Q is the variable undershoot below the reorder point — and it
+is measured, not assumed: realised Q has a coefficient of variation of 1.59 (see "How well does Q
+behave?" in `reports/decision_<date>.md`). A formula handed a quantity that varies by more than its
+own mean is partly being misapplied, so the gap between the fill rate it promises and the one the
+simulation delivers cannot be attributed wholly to distributional shape. The CSL policy's `z · σ_LT`
+makes no lot-size assumption and is unaffected.
+
 Which policy is more conservative is **not fixed**: it turns on σ_LT/Q. A series whose lead-time
 spread is small next to its per-cycle demand needs *less* than `z = 1.645` to reach a 95% fill
 rate; a spiky series whose σ_LT dwarfs Q needs considerably more. Both regimes exist in this

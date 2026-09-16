@@ -129,8 +129,13 @@ A second, fill-rate-targeted policy is implemented alongside it (size safety sto
 function to hit a target fill rate directly, rather than `z · σ`) — and it does **worse on both
 axes**: fill rate 72.7%, cost +15.6%. Its mean safety factor comes out at 1.28 against the CSL
 policy's z = 1.64, because at this panel's σ/Q ratio a 95% fill-rate target is the weaker of the
-two. The formula promises 95% and the simulation delivers 72.7%, which is direct evidence that the
-normal approximation overstates achievable service on this demand — see "Where it fails".
+two. The formula promises 95% and the simulation delivers 72.7%.
+
+That 22-point miss comes with a caveat worth stating rather than glossing: `β = 1 − σ_LT·G(k)/Q`
+assumes a **fixed lot size** Q, and `S = s` gives it no such thing — realised Q has a coefficient
+of variation of 1.59, varying by more than its own mean. So part of that gap is the formula being
+misapplied, not evidence about the shape of demand, and the two are not separable from these runs.
+The cycle-service-level result above carries no such assumption and remains the primary evidence.
 
 LightGBM now wins on cost too — $681/fold (4.5%) cheaper than SeasonalNaive — but that wasn't true
 on the first pass, and the reason why is worth keeping visible rather than quietly fixing and
@@ -266,10 +271,12 @@ guesses.
   NBEATS 71.5%. v1.1 checked whether this was an artifact of comparing a fill rate against a
   *cycle*-service-level target, since those are different quantities — it isn't. Realised CSL
   averages 82.8%, barely above fill rate and ~12 points below the 95% the policy is sized for.
-  The normal-approximation safety-stock formula (`docs/decision.md`) is now directly implicated
-  rather than merely suspected: a policy sized from the same normal theory to hit a 95% fill rate
-  *directly* delivers 72.7%, a 22-point miss. The whole normal-theory family mis-predicts service
-  on this right-skewed, spiky demand. Flagged as an open problem, not silently accepted.
+  The normal-approximation safety-stock formula (`docs/decision.md`) is the leading suspect: a
+  policy sized from the same normal theory to hit a 95% fill rate *directly* delivers 72.7%, a
+  22-point miss — though that particular formula also assumes a fixed lot size this project's
+  `S = s` policy doesn't provide (realised Q has CV 1.59), so shape and misapplication both
+  contribute and these runs can't separate them. Flagged as an open problem, not silently
+  accepted.
 - **`y` is a demand proxy, not demand.** Units sold under-counts true demand whenever a SKU was
   actually out of stock (stockout censoring) — no correction is applied in v1 (`docs/data.md`).
   Every accuracy and cost number in this README inherits that limitation.
