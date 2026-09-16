@@ -1,4 +1,4 @@
-.PHONY: setup data data-full eda backtest divergence decide reconcile train score serve dashboard test lint format
+.PHONY: setup data data-full eda backtest divergence decide safety-stock reconcile train score serve dashboard test lint format
 
 setup:
 	uv sync
@@ -28,6 +28,11 @@ divergence:
 
 decide:
 	uv run python -m reorderpoint.decision
+
+# 2x2 ablation: {normal, empirical} x {2-bucket, 6-bucket} safety-stock calibration.
+# Reuses the forecast cache from `make divergence`, so it costs simulations, not backtests.
+safety-stock:
+	uv run python -m reorderpoint.ablate_safety_stock
 
 reconcile:
 	uv run python -m reorderpoint.reconcile

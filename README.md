@@ -42,6 +42,7 @@ make data       # download and ingest Track A (M5), HOBBIES only — fast day-to
 make backtest   # rolling-origin backtest, writes reports/backtest_<date>.md
 make divergence # are the models actually different? writes reports/model_divergence_<date>.md
 make decide     # reorder policy + cost simulation, writes reports/decision_<date>.md
+make safety-stock # 2x2 safety-stock calibration ablation, writes reports/safety_stock_<date>.md
 make data-full  # full M5, all 3 categories — needed for reconcile
 make reconcile  # hierarchical reconciliation experiment, writes reports/reconciliation_<date>.md
 make train      # fit + persist the production LightGBM model (models/production/lightgbm.joblib)
