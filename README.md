@@ -157,6 +157,43 @@ old method was under-provisioning safety stock across the board, not just for Li
 ranking now matches accuracy — the accuracy winner should also win on decision cost, which is the
 whole point of judging models by decision effect rather than RMSE alone.
 
+**Safety-stock calibration: a 2x2 ablation (v1.1)** — every model missing the service target by
+~12 points pointed at the safety-stock rule rather than at any one model, and two separate choices
+were baked into that rule. They were separated and measured independently. Full analysis in
+[`reports/safety_stock_2026-09-16.md`](reports/safety_stock_2026-09-16.md).
+
+- **Form** — `z · σ_pooled` (assumes symmetric normal lead-time demand) vs. the residual
+  distribution's own quantile at the target level (assumes nothing).
+- **Granularity** — the current 2 intermittency buckets vs. intermittency × volume tercile.
+
+| form | granularity | mean total cost / fold | fill rate | cycle service level |
+|---|---|---|---|---|
+| normal | intermittency × volume | **$13,458** (-9.4%) | 82.5% | 80.7% |
+| empirical | intermittency × volume | $13,548 (-8.8%) | 82.2% | 79.8% |
+| empirical | intermittency | $14,662 (-1.2%) | 79.7% | 79.9% |
+| normal | intermittency *(shipped)* | $14,848 | 81.5% | 82.8% |
+
+**Granularity is the lever; distributional form is not.** Finer pooling alone cuts cost 9.4%;
+swapping in empirical quantiles alone cuts 1.2% and *lowers* fill rate, and adds nothing on top of
+finer pooling. Both diagnostics predicted it: fill rate falls from ~98% in the lowest volume decile
+to ~75% in the highest under the shipped scheme, and per-series residual std spans nearly an order
+of magnitude *inside* a single bucket (p90/p10 ≈ 8). Pooling a buffer in absolute units across that
+spread was the defect — the distribution's shape was not the binding constraint.
+
+Two honest qualifications. The "6-bucket" scheme only ever populates **4** buckets, because
+intermittency and volume are nearly the same variable here — every `regular` series lands in the
+top volume tercile, so what this really tests is splitting the *intermittent* class by volume. And
+the empirical quantile's bootstrap CI spans a median 85% of the estimate itself (vs. 44% for
+`z · std`, which uses every observation rather than the handful in the tail) — a meaningful part of
+why the empirical form doesn't win is simply that it's the noisier estimator at this sample size.
+
+**Neither lever closes the service gap**, and that is the more useful result: the best cell still
+lands 12 points short, with CSL slipping as cost improves (finer buckets shift buffer toward
+high-volume SKUs, which helps unit-weighted fill rate and hurts cycle-weighted CSL). With both the
+residual distribution's shape and its pooling granularity ruled out, the remaining suspect is the
+policy's structure — `S = s` means an order only ever refills the accumulated undershoot, so
+inventory is rebuilt to the reorder point and no further. See "What I'd do with a budget".
+
 **Hierarchical reconciliation (Phase 5)** — full M5 ingested (30,490 series, all 3 categories,
 kept off the memory-safe path via parquet predicate pushdown), scoped to a 6,098-series hierarchy
 (2 stores, one per state, full category/department tree under each), 400-series bottom-level
@@ -287,13 +324,11 @@ guesses.
 
 ## What I'd do with a budget
 
-- **Empirical or skewed safety-stock sizing**, replacing the current `z · σ` normal approximation
-  — the single highest-leverage fix given every model misses the 95% service-level target. A
-  quantile-based or bootstrapped lead-time-demand distribution, rather than a symmetric one, is the
-  natural next step (see "Where it fails"). v1.1 sharpened this: the fix must leave normal theory
-  behind entirely, not swap one normal-theory formula for another — sizing safety stock from the
-  normal loss function to target fill rate directly was tried and came out 22 points short of its
-  own promise.
+- **Lot sizing: a real `S > s`.** v1.1 ruled out both suspects behind the service-level gap (see
+  "Safety-stock calibration" in Results), leaving the order-up-to policy itself. Testing a genuine
+  order-up-to level, or an EOQ-style lot size, against the current `S = s` is now the highest-value
+  open question in the decision layer — and it would also give the fill-rate formula the fixed Q it
+  assumes.
 - **Exogenous features for NBEATS.** The Phase 7 comparison is confounded by feature richness, not
   just architecture — LightGBM sees price/calendar/SNAP, NBEATS sees none. `neuralforecast`
   supports `futr_exog_list`/`hist_exog_list`; wiring the same feature set in would make the

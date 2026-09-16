@@ -323,9 +323,11 @@ def build_report(
         "## Can the buckets support the estimate?",
         "",
         "The constraint named up front: ~400 residuals per fold, split two ways, leaves ~200 per "
-        f"bucket — a {target:.0%} quantile then rests on ~10 tail observations. Split six ways it "
-        "is ~3. Each bucket's statistic therefore carries a bootstrap CI "
-        f"({ss.N_BOOTSTRAP:,} resamples) on the quantile itself.",
+        f"bucket — a {target:.0%} quantile then rests on ~10 tail observations, and a six-way "
+        "split was expected to cut that to ~3. It turned out less severe than that (the six-way "
+        "split only populates four buckets — see below), but still thin. Each bucket's statistic "
+        f"carries a bootstrap CI ({ss.N_BOOTSTRAP:,} resamples) on the quantile itself so the "
+        "thinness is visible rather than implied.",
         "",
         "Median bucket sizes and CI widths (CI width as a fraction of the point estimate):",
         "",
@@ -343,24 +345,46 @@ def build_report(
         "",
     ]
 
+    populated = (
+        buckets.groupby(["granularity", "form", "fold", "model"])
+        .size()
+        .groupby("granularity")
+        .median()
+    )
+    lines += [
+        f"**The 6-bucket scheme only ever populates "
+        f"{int(populated.get('intermittency_volume', np.nan))} buckets, not 6.** Intermittency and "
+        "volume are close to the same variable on this panel: every one of the ~42 `regular` "
+        "series lands in the top volume tercile, so `regular_lo` and `regular_mid` are empty and "
+        "the `regular` class is never actually subdivided. What lever B really does here is split "
+        "the *intermittent* class three ways by volume — which is worth knowing before reading "
+        "its effect as 'finer pooling in general'.",
+        "",
+    ]
+
     if not fine_emp.empty and not coarse_emp.empty:
         fine_width = fine_emp["ci_width_frac"].median()
         coarse_width = coarse_emp["ci_width_frac"].median()
-        usable = fine_width < 1.0
+        fine_normal = fine[fine["form"] == "normal"]["ci_width_frac"].median()
         lines += [
-            f"At 6 buckets the empirical quantile's CI spans a median "
-            f"{fine_width:.0%} of the estimate itself, against {coarse_width:.0%} at 2 buckets "
-            f"(minimum bucket size {int(fine_emp['n'].min())} vs "
-            f"{int(coarse_emp['n'].min())}). "
-            + (
-                "That is wide but still informative — the finer cells' results below can be read "
-                "as estimates, with that uncertainty attached."
-                if usable
-                else "**A CI wider than the estimate it surrounds is not a usable buffer.** The "
-                "6-bucket cells below are reported for completeness, but this panel does not "
-                "carry enough residuals per bucket to estimate a tail quantile at that "
-                "granularity. That is a finding about the data, not a tuning problem: more "
-                "buckets cannot help until there are more series per bucket."
+            f"The empirical quantile's CI spans a median {fine_width:.0%} of the estimate itself "
+            f"at the finer granularity and {coarse_width:.0%} at the coarser one — the split "
+            f"barely moves it, because the binding constraint is the *tail* count, and the "
+            f"smallest bucket ({int(fine_emp['n'].min())} residuals) is the same `regular` group "
+            f"in both. What does move is the **form**: the same buckets sized by `z · std` carry "
+            f"a median CI of {fine_normal:.0%}, roughly half as wide, because a standard "
+            f"deviation uses every observation while a 95th percentile leans on the handful above "
+            f"it.",
+            "",
+            (
+                f"**A CI spanning {fine_width:.0%} of its own point estimate is not a buffer "
+                f"anyone should trust to two significant figures.** The empirical cells below "
+                f"are real measurements and are reported as such, but the estimator is roughly "
+                f"twice as noisy as the one it was meant to replace, which is a substantive "
+                f"part of why it does not win. More buckets cannot fix that; more series per "
+                f"bucket could."
+                if fine_width > 0.5
+                else "Both estimators are pinned down tightly enough to read at face value."
             ),
             "",
         ]
@@ -389,8 +413,64 @@ def build_report(
             float_cols=tuple(c for c in dispersion.reset_index().columns if c != "bucket"),
         ),
         "",
+        *_verdict(summary, baseline, target),
     ]
     return "\n".join(lines)
+
+
+def _verdict(summary: pd.DataFrame, baseline: pd.Series, target: float) -> list[str]:
+    """Which lever moved what, and whether either closes the service-level gap."""
+
+    def cell(form: str, gran: str) -> pd.Series:
+        return summary[(summary["form"] == form) & (summary["granularity"] == gran)].iloc[0]
+
+    form_only = cell("empirical", "intermittency")
+    gran_only = cell("normal", "intermittency_volume")
+    both = cell("empirical", "intermittency_volume")
+    best_service = summary.loc[summary["fill_rate"].idxmax()]
+    gap = target - best_service["fill_rate"]
+
+    def pct(new, old):
+        return (new - old) / old
+
+    return [
+        "## What the 2x2 says",
+        "",
+        f"**Granularity is the lever that moves cost; distributional form is not.** Splitting the "
+        f"buckets alone (normal × 6) takes cost from ${baseline['total_cost']:,.0f} to "
+        f"${gran_only['total_cost']:,.0f} "
+        f"({pct(gran_only['total_cost'], baseline['total_cost']):+.1%}) and lifts fill rate "
+        f"{baseline['fill_rate']:.1%} → {gran_only['fill_rate']:.1%}. Swapping "
+        f"the form alone (empirical × 2) moves cost to ${form_only['total_cost']:,.0f} "
+        f"({pct(form_only['total_cost'], baseline['total_cost']):+.1%}) and *lowers* fill rate to "
+        f"{form_only['fill_rate']:.1%}. Doing both (${both['total_cost']:,.0f}) is no better than "
+        f"granularity alone — the empirical form adds nothing on top, consistent with it being the "
+        f"noisier estimator.",
+        "",
+        "Both diagnostics predicted this. Fill rate falls steeply across volume deciles, and "
+        "per-series residual std spans nearly an order of magnitude inside a single bucket "
+        "(p90/p10 ≈ 8). Pooling in absolute units was the defect; the distribution's shape was "
+        "not the binding one.",
+        "",
+        f"**Neither lever closes the service-level gap.** The best cell on service reaches "
+        f"{best_service['fill_rate']:.1%} fill rate against a {target:.0%} target — still "
+        f"{gap * 100:.0f} percentage points short — and cycle service level actually *falls* from "
+        f"{baseline['cycle_service_level']:.1%} to {gran_only['cycle_service_level']:.1%} as cost "
+        f"improves. That divergence is informative rather than contradictory: finer buckets move "
+        f"buffer from over-provisioned low-volume SKUs to under-provisioned high-volume ones. "
+        f"Fill rate is unit-weighted, so it improves; CSL is cycle-weighted, and low-volume series "
+        f"generate a disproportionate share of cycles, so it slips.",
+        "",
+        "**So the 12-point service gap is not distributional, and not mainly about pooling "
+        "either.** Better pooling buys ~9% of cost, which is worth having, but leaves service "
+        "roughly where it was. Having now ruled out both the shape of the residual distribution "
+        "and the granularity it is estimated at, the remaining suspect is the policy's structure "
+        "rather than its calibration: `S = s` (docs/decision.md step 3) means every order is only "
+        "the accumulated undershoot, so inventory is rebuilt to the reorder point and no further. "
+        "A policy that never orders more than it is short cannot hold a service buffer against "
+        "the next cycle, no matter how well that buffer is sized. That is the next thing to test.",
+        "",
+    ]
 
 
 def main() -> None:
