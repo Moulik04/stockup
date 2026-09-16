@@ -40,6 +40,7 @@ See [`docs/data.md`](docs/data.md).
 make setup      # uv sync + pre-commit install
 make data       # download and ingest Track A (M5), HOBBIES only — fast day-to-day iteration
 make backtest   # rolling-origin backtest, writes reports/backtest_<date>.md
+make divergence # are the models actually different? writes reports/model_divergence_<date>.md
 make decide     # reorder policy + cost simulation, writes reports/decision_<date>.md
 make data-full  # full M5, all 3 categories — needed for reconcile
 make reconcile  # hierarchical reconciliation experiment, writes reports/reconciliation_<date>.md
@@ -65,6 +66,26 @@ raw data → ingest → canonical long table → feature pipeline (point-in-time
 
 ## Results
 
+**Are the models actually different? (v1.1)** — four of the five models below land within 0.01
+RMSSE of each other, which on a 77%-zero panel is exactly what you'd expect if they were all
+forecasting approximately flat near-zero and the ranking were separating noise. That is worth
+testing before presenting any ranking, so it was, with the pass/fail line set in advance:
+>0.95 pooled Pearson correlation on every pair of P50 forecast vectors would mean the comparison
+isn't measuring anything. Full analysis in
+[`reports/model_divergence_2026-09-15.md`](reports/model_divergence_2026-09-15.md).
+
+**5 of 10 pairs clear 0.95 — and they are precisely the four RMSSE-cluster models.** Every pair
+below the line involves SeasonalNaive (0.655–0.704), which really is a different forecast. So the
+rankings are not noise, but two caveats travel with them:
+
+- Most of that correlation is agreement about *series level*, not forecast shape. Demeaning within
+  each series×fold drops the clustered pairs to 0.75–0.91, and the measure is undefined for
+  MovingAverage, whose 28-day forecast is flat by construction.
+- **Across the clustered pairs, the models disagree by only 18–27% of their own mean absolute
+  error.** They differ by a fraction of what they are each wrong by — which is the regime where a
+  reported 1–4% gap can be sampling noise. Read the small gaps in the tables below with that in
+  mind; putting confidence intervals on them is the next piece of v1.1 work.
+
 **Accuracy (Phases 2–3)** — Track A, HOBBIES category, 400-series subsample, 4 rolling-origin
 folds, 28-day horizon. Full table and methodology in
 [`reports/backtest_2026-09-10.md`](reports/backtest_2026-09-10.md).
@@ -83,15 +104,33 @@ quantile-coverage bar (81.2% vs. 80% nominal) — the statistical baselines' P10
 
 **Decision-layer cost simulation (Phase 4)** — same folds/models, run through the newsvendor
 policy in [`docs/decision.md`](docs/decision.md) and a lost-sales (s, S) inventory simulation.
-Full table in [`reports/decision_2026-09-10.md`](reports/decision_2026-09-10.md).
+Full table in [`reports/decision_2026-09-16.md`](reports/decision_2026-09-16.md) (costs are
+unchanged from [`decision_2026-09-10.md`](reports/decision_2026-09-10.md) — the v1.1 rerun
+reproduces them exactly and adds the cycle-service-level column).
 
-| model | mean total cost / fold | holding cost | stockout cost | fill rate |
-|---|---|---|---|---|
-| **LightGBM** | **$14,543** | $7,225 | $7,318 | 81.5% |
-| AutoETS | $14,726 | $7,104 | $7,623 | 80.7% |
-| AutoTheta | $14,830 | $7,395 | $7,435 | 81.2% |
-| MovingAverage | $14,914 | $7,291 | $7,624 | 80.7% |
-| SeasonalNaive | $15,224 | $8,582 | $6,642 | 83.2% |
+| model | mean total cost / fold | holding cost | stockout cost | fill rate | cycle service level |
+|---|---|---|---|---|---|
+| **LightGBM** | **$14,543** | $7,225 | $7,318 | 81.5% | 82.6% |
+| AutoETS | $14,726 | $7,104 | $7,623 | 80.7% | 81.9% |
+| AutoTheta | $14,830 | $7,395 | $7,435 | 81.2% | 82.5% |
+| MovingAverage | $14,914 | $7,291 | $7,624 | 80.7% | 82.3% |
+| SeasonalNaive | $15,224 | $8,582 | $6,642 | 83.2% | 84.7% |
+
+**Two service measures (v1.1).** `service_level_target = 0.95` is a *cycle service level* — the
+probability of surviving a replenishment cycle without a stockout — while this table has always
+reported *fill rate*, the fraction of demand met from stock. Those are different quantities, and a
+95% CSL does not imply a 95% fill rate, so the "every model misses the target" claim was worth
+re-testing against the measure the policy actually aims at. It survives: realised CSL averages
+**82.8%** against fill rate's 81.5%, only 1.3 points apart and both ~12 points short of target.
+The policy misses the target it was sized for; this was never a metric mismatch. Details in
+[`reports/decision_2026-09-16.md`](reports/decision_2026-09-16.md).
+
+A second, fill-rate-targeted policy is implemented alongside it (size safety stock from the loss
+function to hit a target fill rate directly, rather than `z · σ`) — and it does **worse on both
+axes**: fill rate 72.7%, cost +15.6%. Its mean safety factor comes out at 1.28 against the CSL
+policy's z = 1.64, because at this panel's σ/Q ratio a 95% fill-rate target is the weaker of the
+two. The formula promises 95% and the simulation delivers 72.7%, which is direct evidence that the
+normal approximation overstates achievable service on this demand — see "Where it fails".
 
 LightGBM now wins on cost too — $681/fold (4.5%) cheaper than SeasonalNaive — but that wasn't true
 on the first pass, and the reason why is worth keeping visible rather than quietly fixing and
@@ -181,9 +220,10 @@ value forward, so any series with a recent nonzero sale gets that value echoed a
 horizon — inflating its average forecast (and thus its reorder point) in a way that shows up as
 *worse accuracy* but functions as an *unpriced safety margin* against demand spikes. NBEATS, being
 more accurate, doesn't carry that accidental cushion. And it's not NBEATS-specific: fill rate
-across every model this project has evaluated — LightGBM 81.5%, AutoETS 80.7%, AutoTheta 81.1%,
+across every model this project has evaluated — LightGBM 81.5%, AutoETS 80.7%, AutoTheta 81.2%,
 MovingAverage 80.7%, SeasonalNaive 83.2%, NBEATS 71.5% — falls short of the 95% service-level
-target. That every model misses, in a narrow band except for the most accurate one, points to the
+target (and v1.1 confirmed the same shortfall on cycle service level, the measure the policy
+actually targets — see "Two service measures" above). That every model misses, in a narrow band except for the most accurate one, points to the
 decision layer's safety-stock formula itself: a symmetric normal approximation (`z · σ`) built
 from empirical residual variance likely understates the true risk of a right-skewed, spiky demand
 distribution, regardless of how accurately σ is measured. A skewed or empirical-quantile-based
@@ -220,12 +260,16 @@ guesses.
 - **New items are common, not an edge case.** 3,056 of 5,650 series (54%) have their first nonzero
   sale more than 90 days into the panel (`reports/eda.md`) — genuine cold-start series the model
   has to handle as a matter of course, not a rare exception worth a footnote.
-- **No model hits the stated service-level target.** Every model this project has evaluated at the
-  decision layer — LightGBM 81.5%, AutoETS 80.7%, AutoTheta 81.1%, MovingAverage 80.7%,
-  SeasonalNaive 83.2%, NBEATS 71.5% — falls short of the 95% `service_level_target` fill rate. The
-  safety-stock formula's normal-distribution approximation (`docs/decision.md`) is the likely
-  systemic cause on this right-skewed, spiky demand — not an isolated bug in any one model. Flagged
-  as an open problem, not silently accepted.
+- **No model hits the stated service-level target — measured against the right metric, and it
+  still holds.** Every model this project has evaluated at the decision layer falls short: fill
+  rate LightGBM 81.5%, AutoETS 80.7%, AutoTheta 81.2%, MovingAverage 80.7%, SeasonalNaive 83.2%,
+  NBEATS 71.5%. v1.1 checked whether this was an artifact of comparing a fill rate against a
+  *cycle*-service-level target, since those are different quantities — it isn't. Realised CSL
+  averages 82.8%, barely above fill rate and ~12 points below the 95% the policy is sized for.
+  The normal-approximation safety-stock formula (`docs/decision.md`) is now directly implicated
+  rather than merely suspected: a policy sized from the same normal theory to hit a 95% fill rate
+  *directly* delivers 72.7%, a 22-point miss. The whole normal-theory family mis-predicts service
+  on this right-skewed, spiky demand. Flagged as an open problem, not silently accepted.
 - **`y` is a demand proxy, not demand.** Units sold under-counts true demand whenever a SKU was
   actually out of stock (stockout censoring) — no correction is applied in v1 (`docs/data.md`).
   Every accuracy and cost number in this README inherits that limitation.
@@ -239,7 +283,10 @@ guesses.
 - **Empirical or skewed safety-stock sizing**, replacing the current `z · σ` normal approximation
   — the single highest-leverage fix given every model misses the 95% service-level target. A
   quantile-based or bootstrapped lead-time-demand distribution, rather than a symmetric one, is the
-  natural next step (see "Where it fails").
+  natural next step (see "Where it fails"). v1.1 sharpened this: the fix must leave normal theory
+  behind entirely, not swap one normal-theory formula for another — sizing safety stock from the
+  normal loss function to target fill rate directly was tried and came out 22 points short of its
+  own promise.
 - **Exogenous features for NBEATS.** The Phase 7 comparison is confounded by feature richness, not
   just architecture — LightGBM sees price/calendar/SNAP, NBEATS sees none. `neuralforecast`
   supports `futr_exog_list`/`hist_exog_list`; wiring the same feature set in would make the

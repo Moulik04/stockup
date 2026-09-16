@@ -378,3 +378,114 @@ def test_run_decision_backtest_and_report_smoke(monkeypatch):
     report = dec.write_decision_report(results, costs)
     assert "Decision" in report or "decision" in report
     assert "total_cost" in report or "Total cost" in report.lower()
+
+
+# --- v1.1 Task 2: cycle service level and the fill-rate-targeted policy ---
+
+
+def test_simulate_series_counts_a_clean_cycle():
+    # s=S=8, start at 8. day0: ship 5 -> on_hand 3 < 8, order placed, arrives day 2.
+    # No demand while the order is in transit, so the cycle closes without a stockout.
+    demand = np.array([5.0, 0.0, 0.0, 0.0])
+    result = dec.simulate_series(
+        demand, s=8.0, S=8.0, on_hand_start=8.0, lead_time_days=2, unit_cost=1.0, costs=_costs()
+    )
+    assert result.cycles == 1
+    assert result.stockout_cycles == 0
+
+
+def test_simulate_series_counts_a_stockout_cycle():
+    # Order placed at the end of day 0 (on_hand 0 < s), arrives day 2. Day 1's demand of 5 is
+    # entirely lost while that order is in transit -> the cycle is a stockout cycle.
+    demand = np.array([8.0, 5.0, 0.0, 0.0])
+    result = dec.simulate_series(
+        demand, s=8.0, S=8.0, on_hand_start=8.0, lead_time_days=2, unit_cost=1.0, costs=_costs()
+    )
+    assert result.cycles == 1
+    assert result.stockout_cycles == 1
+    assert result.fill_rate == pytest.approx(8.0 / 13.0)
+
+
+def test_simulate_series_open_cycle_at_horizon_end_is_not_counted():
+    # Order placed day 0, lead time 5, but the horizon ends at day 3 — it never lands. An
+    # unfinished cycle is not evidence either way and must not be scored as a success.
+    demand = np.array([8.0, 0.0, 0.0, 0.0])
+    result = dec.simulate_series(
+        demand, s=8.0, S=8.0, on_hand_start=8.0, lead_time_days=5, unit_cost=1.0, costs=_costs()
+    )
+    assert result.cycles == 0
+    assert result.stockout_cycles == 0
+
+
+def test_simulate_series_lost_sales_outside_any_cycle_do_not_touch_csl():
+    # s=S=0 never triggers an order, so there are no cycles at all, yet demand is lost.
+    # Fill rate must register that; CSL has no cycle to register it in.
+    demand = np.array([4.0, 4.0])
+    result = dec.simulate_series(
+        demand, s=0.0, S=0.0, on_hand_start=0.0, lead_time_days=2, unit_cost=1.0, costs=_costs()
+    )
+    assert result.cycles == 0
+    assert result.fill_rate == pytest.approx(0.0)
+
+
+def test_standard_loss_matches_known_values():
+    # G(0) = phi(0) = 1/sqrt(2*pi); G is strictly decreasing and positive.
+    assert dec.standard_loss(0.0) == pytest.approx(1 / np.sqrt(2 * np.pi))
+    assert dec.standard_loss(1.0) == pytest.approx(norm.pdf(1.0) - 1.0 * (1 - norm.cdf(1.0)))
+    assert dec.standard_loss(3.0) > 0
+    assert dec.standard_loss(3.0) < dec.standard_loss(1.0) < dec.standard_loss(-1.0)
+
+
+def test_fill_rate_k_inverts_the_loss_relationship():
+    # Round-trip: pick k, derive the fill rate it implies, and check the solver recovers k.
+    q, sigma = 20.0, 8.0
+    for k_true in [-0.5, 0.0, 1.0, 2.0]:
+        fill = 1 - sigma * dec.standard_loss(k_true) / q
+        assert dec.fill_rate_k(float(fill), q, sigma) == pytest.approx(k_true, abs=1e-6)
+
+
+def test_fill_rate_k_needs_more_safety_stock_for_a_smaller_order_quantity():
+    # The Task 2 mechanism: with S = s, Q is small, and a small Q forces a larger k for the
+    # same fill rate.
+    big_q = dec.fill_rate_k(0.95, order_quantity=100.0, lead_time_std=10.0)
+    small_q = dec.fill_rate_k(0.95, order_quantity=10.0, lead_time_std=10.0)
+    assert small_q > big_q
+
+
+def test_fill_rate_k_degenerate_inputs_return_zero():
+    assert dec.fill_rate_k(0.95, order_quantity=0.0, lead_time_std=5.0) == 0.0
+    assert dec.fill_rate_k(0.95, order_quantity=5.0, lead_time_std=0.0) == 0.0
+    assert dec.fill_rate_k(0.95, order_quantity=5.0, lead_time_std=np.nan) == 0.0
+
+
+def test_fill_rate_k_rejects_out_of_range_target():
+    with pytest.raises(ValueError):
+        dec.fill_rate_k(1.0, order_quantity=5.0, lead_time_std=1.0)
+
+
+def test_reorder_decision_fill_rate_sizes_from_the_loss_function():
+    stats = pd.DataFrame({"mean": [20.0], "std": [8.0]}, index=pd.Index(["A"], name="series_id"))
+    out = dec.reorder_decision_fill_rate(stats, target_fill_rate=0.95)
+    k = dec.fill_rate_k(0.95, order_quantity=20.0, lead_time_std=8.0)
+    assert out.loc["A", "safety_stock"] == pytest.approx(k * 8.0)
+    assert out.loc["A", "reorder_point"] == pytest.approx(20.0 + k * 8.0)
+
+
+def test_fill_rate_policy_vs_csl_policy_depends_on_the_sigma_to_q_ratio():
+    """Which policy is more conservative is not fixed — it turns on σ_LT/Q.
+
+    The two targets answer different questions, so at the same nominal 95% neither dominates:
+    G(k) = (1 − FR)·Q/σ means a series whose lead-time spread is small next to its per-cycle
+    demand needs *less* than z = 1.645 to meet a 95% fill rate, while a spiky series whose σ
+    dwarfs Q needs considerably more. Both regimes exist in this panel, which is why the pooled
+    fill-rate and CSL numbers can't be read off one another.
+    """
+    stats = pd.DataFrame(
+        {"mean": [10.0, 10.0], "std": [9.0, 60.0]},
+        index=pd.Index(["moderate", "spiky"], name="series_id"),
+    )
+    csl = dec.reorder_decision(stats, service_level=0.95)
+    fr = dec.reorder_decision_fill_rate(stats, target_fill_rate=0.95)
+
+    assert fr.loc["moderate", "reorder_point"] < csl.loc["moderate", "reorder_point"]
+    assert fr.loc["spiky", "reorder_point"] > csl.loc["spiky", "reorder_point"]

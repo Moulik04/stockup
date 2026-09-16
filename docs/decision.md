@@ -98,6 +98,49 @@ simple, explainable policy chosen deliberately over a full newsvendor cost-ratio
 `stockout_penalty_per_unit` do not affect *how much* to order; they only price the simulation
 below, which is how different service levels or models get compared in dollar terms.
 
+### Two service measures, and why they differ (v1.1)
+
+`service_level_target = 0.95` above is a **cycle service level (CSL)** — the probability of
+surviving a replenishment cycle without a stockout. The cost simulation's headline service number
+has always been **fill rate** — the fraction of demand met from stock. These are different
+quantities, and a 95% CSL does not imply a 95% fill rate:
+
+```
+fill_rate ≈ 1 − σ_LT · G(k) / Q,     G(k) = φ(k) − k·(1 − Φ(k))     (standard_loss)
+```
+
+`Q` is the demand consumed per replenishment cycle. Because this project sets `S = s` (step 3
+below), `Q` is only the deficit accumulated since the last order — *small*. Fill rate depends on
+the shortfall per cycle relative to `Q`, so a small `Q` mechanically drives fill rate away from
+CSL; the sizing rule `z · σ_LT` never targeted fill rate in the first place.
+
+Both measures are now computed in the simulation and reported side by side for every model
+(`reports/decision_<date>.md`):
+
+- **Fill rate** = units shipped ÷ units demanded, pooled over units.
+- **Cycle service level** = share of replenishment cycles with no stockout, pooled over cycles. A
+  cycle opens when an order is placed and closes when it lands; it counts as a stockout cycle if
+  any demand goes unmet in between — the exposure window `z · σ_LT` is sized to protect. A cycle
+  still open when the horizon ends is not counted (an unfinished cycle is not evidence either
+  way), and lost sales outside any open cycle — a series whose reorder point is so low it never
+  orders — depress fill rate while belonging to no cycle at all. That asymmetry is real, not a
+  bookkeeping artifact, and is part of why the two measures can diverge sharply here.
+
+### Fill-rate-targeted policy (v1.1, second option)
+
+`reorder_decision_fill_rate` sizes safety stock to hit a target *fill rate* directly, by inverting
+the loss-function relationship above for `k` (`fill_rate_k`, Brent's method on `G`, with `Q`
+estimated per series as its expected lead-time demand), rather than reading `z` off the normal
+quantile. `reorder_point = lead_time_mean + k · σ_LT` exactly as before — only the safety factor
+changes.
+
+Which policy is more conservative is **not fixed**: it turns on σ_LT/Q. A series whose lead-time
+spread is small next to its per-cycle demand needs *less* than `z = 1.645` to reach a 95% fill
+rate; a spiky series whose σ_LT dwarfs Q needs considerably more. Both regimes exist in this
+panel, which is exactly why the CSL and fill-rate numbers cannot be read off one another. Both
+policies are kept and reported — the comparison is the point — with the CSL policy remaining the
+default for `make decide` and the serving path.
+
 ## Cost simulation
 
 Track A has no `unit_cost`/COGS field, so **mean training-window `price` stands in for unit
@@ -117,8 +160,10 @@ one day at a time over realised demand:
   arrives after `lead_time_days` (single outstanding order at a time — continuous review).
 
 Output per series per fold: total holding cost, total stockout cost, their sum, fill rate (units
-shipped / units demanded), and a simplified "turns" (units shipped / average on-hand — not a true
-COGS-based turns ratio, since there's no COGS figure independent of the price-as-cost proxy).
+shipped / units demanded), replenishment cycles and stockout cycles (which give the realised cycle
+service level — see "Two service measures" above), and a simplified "turns" (units shipped /
+average on-hand — not a true COGS-based turns ratio, since there's no COGS figure independent of
+the price-as-cost proxy).
 
 The headline table (`reports/decision_<date>.md`) aggregates cost across folds per model, same
 structure as `reports/backtest_<date>.md`. Phase 4 acceptance: the best model's mean total cost is
