@@ -73,6 +73,24 @@ def sample_series(panel: pd.DataFrame, n: int, seed: int = SAMPLE_SEED) -> pd.Da
     return panel[panel["series_id"].isin(chosen)]
 
 
+def load_eval_panel(n: int = N_SERIES_SAMPLE, seed: int = SAMPLE_SEED) -> pd.DataFrame:
+    """The same `n`-series sample `sample_series` picks, without materialising the full panel.
+
+    `sample_series(panel, n)` needs the whole ~11M-row HOBBIES panel in memory only to keep 400
+    series of it. This reads the id column alone, makes the identical seeded draw, then reads just
+    those series (parquet predicate pushdown) — so analyses that only ever use the sample fit on
+    a small machine. `sample_series` on the result is a no-op, since it already holds n series.
+    """
+    ids = pd.read_parquet(PANEL_PATH, columns=["series_id"])["series_id"].unique()
+    if n >= len(ids):
+        panel = pd.read_parquet(PANEL_PATH)
+    else:
+        chosen = np.random.default_rng(seed).choice(ids, size=n, replace=False)
+        panel = pd.read_parquet(PANEL_PATH, filters=[("series_id", "in", list(chosen))])
+    panel["date"] = pd.to_datetime(panel["date"])
+    return panel
+
+
 def _in_sample_scales(train: pd.DataFrame, season_length: int) -> pd.DataFrame:
     df = train.sort_values(["series_id", "date"])[["series_id", "date", "y"]].copy()
     df["y_lag"] = df.groupby("series_id")["y"].shift(season_length)

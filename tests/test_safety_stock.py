@@ -22,7 +22,9 @@ def test_intermittency_buckets_reproduce_the_two_way_split():
 def test_intermittency_volume_crosses_with_terciles():
     zero_rates = _series([0.9] * 6)
     volumes = _series([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
-    buckets = ss.assign_buckets(zero_rates, volumes, granularity="intermittency_volume")
+    buckets = ss.assign_buckets(
+        zero_rates, volumes, granularity="volume_tercile_within_intermittency"
+    )
     assert set(buckets) == {"intermittent_lo", "intermittent_mid", "intermittent_hi"}
     assert buckets.iloc[0] == "intermittent_lo"
     assert buckets.iloc[-1] == "intermittent_hi"
@@ -32,13 +34,30 @@ def test_tied_volumes_still_split_into_three_groups():
     # Mostly-zero demand makes ties the norm; plain qcut would refuse to cut these.
     zero_rates = _series([0.9] * 9)
     volumes = _series([0.0] * 9)
-    buckets = ss.assign_buckets(zero_rates, volumes, granularity="intermittency_volume")
+    buckets = ss.assign_buckets(
+        zero_rates, volumes, granularity="volume_tercile_within_intermittency"
+    )
     assert len(set(buckets)) == 3
 
 
 def test_intermittency_volume_requires_volumes():
     with pytest.raises(ValueError):
-        ss.assign_buckets(_series([0.9]), None, granularity="intermittency_volume")
+        ss.assign_buckets(_series([0.9]), None, granularity="volume_tercile_within_intermittency")
+
+
+def test_volume_quintile_ignores_intermittency_and_gives_five_balanced_buckets():
+    # Same zero_rate for every series (so intermittency carries no information at all here) —
+    # volume_quintile should still split cleanly into five groups from volume alone.
+    zero_rates = _series([0.9] * 10)
+    volumes = _series(list(range(10)))
+    buckets = ss.assign_buckets(zero_rates, volumes, granularity="volume_quintile")
+    assert set(buckets) == {"q1", "q2", "q3", "q4", "q5"}
+    assert buckets.value_counts().to_dict() == {f"q{i}": 2 for i in range(1, 6)}
+
+
+def test_volume_quintile_requires_volumes():
+    with pytest.raises(ValueError):
+        ss.assign_buckets(_series([0.9]), None, granularity="volume_quintile")
 
 
 def test_unknown_granularity_and_form_rejected():
@@ -109,7 +128,13 @@ def test_finer_granularity_leaves_fewer_observations_per_bucket():
         residuals, zero_rates, volumes, 0.95, "empirical", "intermittency", n_boot=200
     )
     _, fine = ss.per_series_safety_stock(
-        residuals, zero_rates, volumes, 0.95, "empirical", "intermittency_volume", n_boot=200
+        residuals,
+        zero_rates,
+        volumes,
+        0.95,
+        "empirical",
+        "volume_tercile_within_intermittency",
+        n_boot=200,
     )
     assert len(coarse) == 2
     assert len(fine) == 6

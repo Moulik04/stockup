@@ -16,8 +16,11 @@ import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 
+from reorderpoint import calibration as cal
 from reorderpoint import decision as dec
+from reorderpoint.calibration import SafetyStockCalibration
 from reorderpoint.config import REPO_ROOT, Config, load_config
+from reorderpoint.exog import REFERENCE_WINDOW_DAYS, future_exog_from_trailing_window  # noqa: F401
 from reorderpoint.models.base import QuantileForecaster
 from reorderpoint.train import MODEL_PATH, PANEL_PATH
 
@@ -36,50 +39,6 @@ class ReorderRequest(BaseModel):
     on_hand: dict[str, float] = {}
 
 
-REFERENCE_WINDOW_DAYS = 7  # this project's weekly seasonality period (SEASON_LENGTH elsewhere)
-
-
-def future_exog_from_trailing_window(
-    panel: pd.DataFrame, series_ids: list[str], horizon: int
-) -> pd.DataFrame:
-    """Production stand-in for real forward-looking exog (future calendar/events/price): repeats
-    each series' most recent `REFERENCE_WINDOW_DAYS`-day row pattern, tiled to cover `horizon`,
-    with dates advanced past the panel's last known date. That reference window is a *fixed*
-    size, not sized to `horizon` itself — an earlier version used `group.tail(horizon)`, which
-    meant day 1's proxy price/event/SNAP values silently shifted depending on how many days were
-    requested (a different historical day became "day 1 of the template" for every horizon
-    length). With a fixed window, day 1 of any forecast always means the same thing. Calendar
-    fields that are genuinely knowable in advance (wday/month/year) are recomputed from the real
-    future dates rather than carried over stale; everything else (price, events, SNAP) is a
-    repeat-the-recent-pattern proxy — a real deployment would source these from an actual
-    pricing/promo/calendar system, the same kind of disclosed simplification as y-as-demand-proxy
-    in docs/data.md.
-    """
-    sub = panel[panel["series_id"].isin(series_ids)].sort_values(["series_id", "date"])
-    last_date = panel["date"].max()
-    future_dates = pd.date_range(last_date + pd.Timedelta(days=1), periods=horizon, freq="D")
-
-    frames = []
-    for series_id, group in sub.groupby("series_id"):
-        reference = group.tail(REFERENCE_WINDOW_DAYS).reset_index(drop=True)
-        if reference.empty:
-            continue
-        reps = horizon // len(reference) + 1
-        trailing = pd.concat([reference] * reps, ignore_index=True).iloc[:horizon].copy()
-        trailing["date"] = future_dates
-        if "wday" in trailing.columns:
-            # M5's wday convention is Saturday=1..Friday=7 (confirmed against calendar.csv),
-            # not pandas' Monday=0 dayofweek — the model was trained on the former.
-            trailing["wday"] = ((trailing["date"].dt.dayofweek + 2) % 7) + 1
-        if "month" in trailing.columns:
-            trailing["month"] = trailing["date"].dt.month
-        if "year" in trailing.columns:
-            trailing["year"] = trailing["date"].dt.year
-        trailing["series_id"] = series_id
-        frames.append(trailing.drop(columns=["y"], errors="ignore"))
-    return pd.concat(frames, ignore_index=True)
-
-
 @lru_cache(maxsize=1)
 def _load_model() -> QuantileForecaster:
     if not MODEL_PATH.exists():
@@ -92,6 +51,46 @@ def _load_panel() -> pd.DataFrame:
     panel = pd.read_parquet(PANEL_PATH)
     panel["date"] = pd.to_datetime(panel["date"])
     return panel
+
+
+@lru_cache(maxsize=1)
+def _load_calibration() -> SafetyStockCalibration:
+    return cal.load()
+
+
+def get_calibration() -> SafetyStockCalibration:
+    """Missing calibration is a 503, exactly like a missing model. There is deliberately no
+    fallback to raw quantile-derived sizing: that is the method Phase 4 showed loses, and serving
+    it silently is how this system ended up doing so."""
+    try:
+        return _load_calibration()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+def size_decisions(
+    preds: pd.DataFrame,
+    on_hand: pd.Series,
+    config: Config,
+    calibration: SafetyStockCalibration,
+) -> pd.DataFrame:
+    """The one place served reorder points are computed (`/reorder`, `make score`, the
+    dashboard): calibrated safety stock through `decision.compute_decisions`, the same sizing rule
+    the backtest harness applies (`decision.calibrated_reorder_decision`)."""
+    costs = config.costs
+    if calibration.lead_time_days != costs.lead_time_days:
+        raise ValueError(
+            f"calibration was fitted for a {calibration.lead_time_days}-day lead time but the "
+            f"config says {costs.lead_time_days}; rerun `make calibrate`"
+        )
+    return dec.compute_decisions(
+        preds,
+        on_hand,
+        costs.lead_time_days,
+        costs.service_level_target,
+        safety_stock=calibration.safety_stock(costs.service_level_target),
+        lot_multiple=costs.lot_multiple,
+    )
 
 
 def get_model() -> QuantileForecaster:
@@ -140,6 +139,7 @@ def reorder(
     model: QuantileForecaster = Depends(get_model),
     panel: pd.DataFrame = Depends(get_history),
     config: Config = Depends(get_config),
+    calibration: SafetyStockCalibration = Depends(get_calibration),
 ) -> list[dict]:
     _validate_series_ids(panel, req.series_ids)
     lead_time_days = config.costs.lead_time_days
@@ -147,9 +147,10 @@ def reorder(
     preds = model.predict_quantiles(lead_time_days, future_exog=future_exog)
 
     on_hand = pd.Series({sid: req.on_hand.get(sid, 0.0) for sid in req.series_ids})
-    decisions = dec.compute_decisions(
-        preds, on_hand, lead_time_days, config.costs.service_level_target
-    )
+    try:
+        decisions = size_decisions(preds, on_hand, config, calibration)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     decisions = decisions.reset_index().rename(columns={"index": "series_id"})
     cols = [
         "series_id",
@@ -164,9 +165,12 @@ def reorder(
 
 @app.get("/metrics")
 def metrics(
-    panel: pd.DataFrame = Depends(get_history), config: Config = Depends(get_config)
+    panel: pd.DataFrame = Depends(get_history),
+    config: Config = Depends(get_config),
+    calibration: SafetyStockCalibration = Depends(get_calibration),
 ) -> dict:
     return {
+        "safety_stock_calibration": calibration.summary(),
         "n_series": int(panel["series_id"].nunique()),
         "panel_last_date": panel["date"].max().strftime("%Y-%m-%d"),
         "track": config.track,
@@ -179,6 +183,7 @@ def run_batch() -> None:
     panel = get_history()
     model = get_model()
     config = get_config()
+    calibration = get_calibration()
     series_ids = panel["series_id"].unique().tolist()
 
     lead_time_days = config.costs.lead_time_days
@@ -188,9 +193,7 @@ def run_batch() -> None:
     # No live on-hand feed for Track A yet — 0.0 is the only sensible default absent real
     # inventory data (documented limitation, same spirit as docs/data.md's other proxies).
     on_hand = pd.Series(0.0, index=series_ids)
-    decisions = dec.compute_decisions(
-        preds, on_hand, lead_time_days, config.costs.service_level_target
-    )
+    decisions = size_decisions(preds, on_hand, config, calibration)
     decisions = decisions.reset_index().rename(columns={"index": "series_id"})
 
     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)

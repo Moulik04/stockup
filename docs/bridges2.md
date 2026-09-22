@@ -129,3 +129,29 @@ no verification gate, and — the actual root cause of the most confusing failur
 on this cluster activates the read-only base module as a venv, leaving `VIRTUAL_ENV` pointing at
 the wrong place unless explicitly unset. `setup_env.sh` now handles all three; a fresh
 `bash scripts/bridges2/setup_env.sh` should work cleanly end to end.
+
+## Next run: recover per-series detail for NBEATS confidence intervals, and retest under `S > s`
+
+`scripts/bridges2/run_deep_backtest.py` now writes `deep_backtest_detail.parquet` and
+`deep_decision_detail.parquet` next to the reports. Phase 7's NBEATS numbers exist only as aggregate
+tables because the per-series detail used to be discarded on the cluster, so NBEATS-vs-LightGBM
+(accuracy and cost) has no confidence interval (`reorderpoint/model_ci.py` is written to take it).
+**Do not request GPU time for this alone** — fold it into the next Bridges-2 run that is happening
+anyway (e.g. the exogenous-features NBEATS variant), copy the two parquet files back, and the
+bootstrap runs locally. Ask MJ before submitting any job, as always.
+
+**Also queued (2026-09-21): rerun the decision-cost comparison under `S = s + 2 x lead-time
+demand`.** The 2026-09-10 result (NBEATS wins on accuracy, loses on cost) was measured entirely
+under `S = s`, since shown to be a defective policy (`reports/order_up_to_2026-09-20.md`) that
+reverses the LightGBM-vs-SeasonalNaive ranking too. Hypothesis: NBEATS lost partly because `S = s`
+gave every model no real buffer, and the naive model's own forecast bias was accidentally supplying
+one that NBEATS, being more accurate, didn't have — `S > s` supplies a buffer directly, so NBEATS
+should close some of its cost gap to LightGBM under it. `decision.run_decision_backtest` now takes
+`lot_multiples` (plural): `run_deep_backtest.py` calls it once with `lot_multiples=(0.0, 2.0)`, so
+NBEATS is fit only once per fold and both `S = s` and `S = s + 2 x lead-time demand` (LightGBM's own
+chosen lot) are resimulated off that single fit — writing `decision_deep_lot2_<date>.md` alongside
+the existing `decision_deep_<date>.md`. No extra GPU time: fitting is the expensive part for a deep
+model, and it happens once; only the (CPU-side) resimulation runs twice. Either outcome is
+informative: NBEATS closing the gap supports the root-cause story across a third model; NBEATS still
+losing means its cost problem has a cause `S = s` doesn't explain, and the synthesis should say so
+rather than assume the policy fix generalises.

@@ -154,3 +154,26 @@ def test_markdown_table_formats_floats():
     table = bt._markdown_table(df, float_cols=("mase",))
     assert "1.235" in table
     assert "| model | mase |" in table
+
+
+def test_load_eval_panel_draws_the_same_series_as_sample_series(tmp_path, monkeypatch):
+    """`load_eval_panel` exists to avoid loading the full panel; it must not change which series
+    an analysis sees, or every number downstream silently stops being comparable."""
+    ids = [f"S{i:03d}" for i in range(60)]
+    full = pd.DataFrame(
+        [
+            {"series_id": sid, "date": pd.Timestamp("2020-01-01") + pd.Timedelta(days=d), "y": d}
+            for sid in ids
+            for d in range(3)
+        ]
+    )
+    path = tmp_path / "panel.parquet"
+    full.to_parquet(path, index=False)
+    monkeypatch.setattr(bt, "PANEL_PATH", path)
+
+    expected = set(bt.sample_series(full, 12, seed=0)["series_id"])
+    loaded = bt.load_eval_panel(12, seed=0)
+    assert set(loaded["series_id"]) == expected
+    assert len(loaded) == 12 * 3
+    # a request for more series than exist returns the whole panel, as sample_series does
+    assert len(bt.load_eval_panel(1000, seed=0)) == len(full)

@@ -6,7 +6,7 @@ Newsvendor-style service-level policy, documented in docs/decision.md. Implement
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import pandas as pd
@@ -14,7 +14,7 @@ from scipy.optimize import brentq
 from scipy.stats import norm
 
 from reorderpoint import backtest as bt
-from reorderpoint.config import CostParams, load_config
+from reorderpoint.config import CostParams, describe_holding_rate, load_config
 
 Z80 = norm.ppf(0.9)  # P10/P90 is the central 80% interval everywhere in this project
 
@@ -53,9 +53,34 @@ def reorder_decision(lead_time_stats: pd.DataFrame, service_level: float) -> pd.
     return out
 
 
-def order_quantity(reorder_point: pd.Series, on_hand: pd.Series) -> pd.Series:
-    """Order-up-to-S policy with S = reorder_point — docs/decision.md step 3."""
-    return (reorder_point - on_hand).clip(lower=0)
+def calibrated_reorder_decision(
+    lead_time_stats: pd.DataFrame, safety_stock: pd.Series, service_level: float
+) -> pd.DataFrame:
+    """Reorder point from a *calibrated* per-series safety stock (`safety_stock.py`) instead of
+    `z * std` off the model's own interval width.
+
+    The single sizing rule shared by the backtest harness (`ablate_safety_stock.run_cell`) and the
+    served path (`serve.size_decisions`), so they cannot drift apart. A series the calibration
+    never saw falls back to the quantile-derived buffer, so a thin calibration degrades to the
+    old method for that series instead of dropping it from the policy."""
+    fallback = reorder_decision(lead_time_stats, service_level)["safety_stock"]
+    safety = safety_stock.reindex(lead_time_stats.index)
+    out = lead_time_stats.copy()
+    out["safety_stock"] = safety.where(safety.notna(), fallback)
+    out["reorder_point"] = out["mean"] + out["safety_stock"]
+    return out
+
+
+def order_quantity(
+    reorder_point: pd.Series, on_hand: pd.Series, order_up_to: pd.Series | None = None
+) -> pd.Series:
+    """Order up to S when on-hand is below the reorder point s — docs/decision.md step 3.
+
+    `order_up_to=None` is the original `S = s` (order the deficit below s). With `S > s` the order
+    is `S - on_hand`, placed only while on-hand is below s."""
+    if order_up_to is None:
+        return (reorder_point - on_hand).clip(lower=0)
+    return (order_up_to - on_hand).where(on_hand < reorder_point, 0.0).clip(lower=0)
 
 
 def stockout_probability(on_hand: pd.Series, mean: pd.Series, std: pd.Series) -> pd.Series:
@@ -84,16 +109,38 @@ def _rationale_line(
 
 
 def compute_decisions(
-    forecast: pd.DataFrame, on_hand: pd.Series, lead_time_days: int, service_level: float
+    forecast: pd.DataFrame,
+    on_hand: pd.Series,
+    lead_time_days: int,
+    service_level: float,
+    safety_stock: pd.Series | None = None,
+    lot_multiple: float = 0.0,
 ) -> pd.DataFrame:
     """Full per-SKU policy: mean, std, safety_stock, reorder_point, on_hand, order_quantity,
     stockout_probability, rationale — one row per series_id.
+
+    `safety_stock=None` sizes from the model's own P10/P90 width (`z * std`) — the method Phase 4
+    showed loses, kept for the fallback and for comparison. Pass the per-series calibrated buffer
+    to size the way the backtest harness does (see `calibrated_reorder_decision`).
     """
     stats = lead_time_demand_stats(forecast, lead_time_days)
-    out = reorder_decision(stats, service_level)
+    if safety_stock is None:
+        out = reorder_decision(stats, service_level)
+    else:
+        out = calibrated_reorder_decision(stats, safety_stock, service_level)
+        z = norm.ppf(service_level)
+        if z > 0:
+            # the stockout probability needs a spread; the one implied by the calibrated buffer,
+            # so it is exactly 1 - service_level when on-hand sits at the reorder point
+            out["std"] = out["safety_stock"] / z
     out = out.reindex(on_hand.index)
     out["on_hand"] = on_hand
-    out["order_quantity"] = order_quantity(out["reorder_point"], out["on_hand"])
+    # `lot_multiple` sets S = s + lot_multiple x E[lead-time demand] (0: the original S = s), the
+    # same rule `_simulate_policy` simulates
+    out["order_up_to"] = out["reorder_point"] + lot_multiple * out["mean"].clip(lower=0)
+    out["order_quantity"] = order_quantity(
+        out["reorder_point"], out["on_hand"], out["order_up_to"] if lot_multiple else None
+    )
     out["stockout_probability"] = stockout_probability(out["on_hand"], out["mean"], out["std"])
     out["rationale"] = [
         _rationale_line(row.on_hand, row.mean, lead_time_days, service_level, row.order_quantity)
@@ -368,13 +415,17 @@ def evaluate_fold_cost_policies(
     costs: CostParams,
     lead_time_std_override: pd.Series | None = None,
     policies: tuple[str, ...] = ("csl",),
+    lot_multiples: tuple[float, ...] = (0.0,),
 ) -> tuple[list[dict], list[pd.DataFrame], pd.Series]:
-    """`evaluate_fold_cost` for several policies at once, fitting the model only once.
+    """`evaluate_fold_cost` for several policies (and, orthogonally, several order-up-to lot
+    multiples) at once, fitting the model only once.
 
-    The fit and the forecast are what cost real time here; the policies differ only in how they
-    turn one set of lead-time stats into a reorder point. Running them off a shared forecast also
-    makes the comparison exact — the two policies are judged on identical predictions, so any
-    difference in outcome is the sizing rule and nothing else.
+    The fit and the forecast are what cost real time here — for a deep model like NBEATS, the only
+    real time. Neither the sizing policy nor `lot_multiple` changes the forecast, only how it is
+    turned into a reorder point / order-up-to level, so every (policy, lot) combination is
+    simulated off the one shared fit. Returns `len(policies) x len(lot_multiples)` rows/details, in
+    that nested order (policy outer, lot inner) — a caller wanting a single (policy, lot) still
+    gets exactly one row back.
     """
     train = panel[panel["date"] <= fold.train_end]
     test = panel[(panel["date"] >= fold.test_start) & (panel["date"] <= fold.test_end)]
@@ -401,18 +452,20 @@ def evaluate_fold_cost_policies(
     rows, details = [], []
     for policy in policies:
         decisions = POLICIES[policy](stats, costs.service_level_target)
-        row, detail = _simulate_policy(
-            decisions,
-            demand_by_series,
-            unit_costs,
-            global_unit_cost,
-            costs,
-            fold,
-            model_name,
-            policy,
-        )
-        rows.append(row)
-        details.append(detail)
+        for lot in lot_multiples:
+            row, detail = _simulate_policy(
+                decisions,
+                demand_by_series,
+                unit_costs,
+                global_unit_cost,
+                costs,
+                fold,
+                model_name,
+                policy,
+                lot_multiple=lot,
+            )
+            rows.append(row)
+            details.append(detail)
 
     residuals = lead_time_forecast_residuals(
         preds, test[["series_id", "date", "y"]], costs.lead_time_days
@@ -432,7 +485,17 @@ def _simulate_policy(
     fold: bt.Fold,
     model_name: str,
     policy: str,
+    lot_multiple: float = 0.0,
+    start_fraction: float = 0.5,
 ) -> tuple[dict, pd.DataFrame]:
+    """Simulate every series' policy over its test window.
+
+    `lot_multiple` sets the order-up-to level `S = s + Q` with `Q = lot_multiple x` the series'
+    expected lead-time demand (`decisions["mean"]`). 0 is the original `S = s`. The trigger stays
+    "on-hand < s, no order in transit"; only how much is ordered changes. A series starts the
+    window at `s + start_fraction x Q`: 0.5 (the default) is the steady-state average of its cycle
+    (`s + Q/2`), 0 starts at the reorder point, 1 at the order-up-to level. It is `s` whatever the
+    fraction when Q = 0, so the original policy is reproduced exactly."""
     sim_rows = []
     for series_id, drow in decisions.iterrows():
         demand = demand_by_series.get(series_id)
@@ -446,26 +509,43 @@ def _simulate_policy(
             # way a series with no test-period demand is already skipped above, rather than let
             # a NaN silently masquerade as a valid (if oddly conservative) simulated outcome.
             continue
-        unit_cost = float(unit_costs.get(series_id, global_unit_cost))
+        # `unit_costs` holds the mean training-window *price* per series; the economics turn it
+        # into the value stock is held at and the cost of a lost sale (config.CostParams).
+        price = float(unit_costs.get(series_id, global_unit_cost))
+        lot = lot_multiple * max(float(drow["mean"]), 0.0) if lot_multiple else 0.0
+        start = s + start_fraction * lot
         result = simulate_series(
             demand,
             s=s,
-            S=s,
-            on_hand_start=s,
+            S=s + lot,
+            on_hand_start=start,
             lead_time_days=costs.lead_time_days,
-            unit_cost=unit_cost,
-            costs=costs,
+            unit_cost=costs.unit_cost(price),
+            costs=replace(costs, stockout_penalty_per_unit=costs.stockout_penalty(price)),
         )
         sim_rows.append(
             {
                 "series_id": series_id,
+                "unit_price": price,
                 **result.__dict__,
                 "lead_time_std": float(drow["std"]),
                 "reorder_point": s,
+                "order_up_to": s + lot,
+                # the exact starting stock, so a replica of the simulation can reproduce it to the
+                # last bit (a recomputed (s + S) / 2 can differ and flip a tie on `on_hand < s`)
+                "on_hand_start": start,
             }
         )
 
     detail = pd.DataFrame(sim_rows)
+    # Stamp the rate this run was simulated at. Holding cost is linear in it and the policy never
+    # reads it, so a stored run can be re-priced exactly — but only against the rate it actually
+    # used, which the config default no longer tells you (holding_breakeven.simulated_rate).
+    detail["holding_cost_rate"] = costs.holding_cost_rate
+    # ...and the economics it was priced under, so `economics.reprice` needs no assumptions.
+    detail["gross_margin"] = np.nan if costs.gross_margin is None else costs.gross_margin
+    detail["stockout_penalty_flat"] = costs.stockout_penalty_per_unit
+    detail["lot_multiple"] = lot_multiple
     total_demanded = detail["units_demanded"].sum()
     total_shipped = detail["units_shipped"].sum()
     total_avg_on_hand = detail["avg_on_hand"].sum()
@@ -563,7 +643,7 @@ def _bootstrap_lead_time_std(
 
 
 def run_decision_backtest(
-    panel: pd.DataFrame, costs: CostParams
+    panel: pd.DataFrame, costs: CostParams, lot_multiples: tuple[float, ...] = (0.0,)
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Returns (results, per_series_detail) across every fold x model — same folds/sample/model
     set as backtest.run_backtest, so the two reports are directly comparable.
@@ -571,6 +651,12 @@ def run_decision_backtest(
     Safety-stock sizing chains forward fold-to-fold per model: fold 1 uses a one-off bootstrap
     calibration (`_bootstrap_lead_time_std`), and every later fold uses the *previous* fold's own
     realised residuals — never a fold's own future outcomes (see `evaluate_fold_cost`).
+
+    `lot_multiples` sets `S = s + m x` expected lead-time demand for every model in this run,
+    for each `m` given ((0.0,), the default: only the original `S = s`). This is the only argument
+    `evaluate_fold_cost_policies` doesn't need a fresh fit for, so passing more than one value —
+    e.g. to compare `S = s` against `S = s + 2 x lead-time demand` for a model expensive to fit
+    (NBEATS) — costs nothing beyond the extra resimulation.
     """
     eval_panel = bt.sample_series(panel, bt.N_SERIES_SAMPLE)
     folds = bt.make_folds(eval_panel, horizon=bt.HORIZON, n_folds=bt.N_FOLDS)
@@ -595,8 +681,12 @@ def run_decision_backtest(
                 costs,
                 lead_time_std_override=prior_std[model_name],
                 policies=tuple(POLICIES),
+                lot_multiples=lot_multiples,
             )
-            for row, detail, policy in zip(rows, details, POLICIES, strict=True):
+            # nested order from evaluate_fold_cost_policies: policy outer, lot_multiple inner
+            combos = [(policy, lot) for policy in POLICIES for lot in lot_multiples]
+            for row, detail, (policy, lot) in zip(rows, details, combos, strict=True):
+                row["lot_multiple"] = lot
                 results.append(row)
                 detail["fold"] = fold.index
                 detail["model"] = model_name
@@ -660,8 +750,14 @@ def write_decision_report(results: pd.DataFrame, costs: CostParams) -> str:
         f"Reorder policy simulated cost, same folds/models as the backtest report. "
         f"lead_time_days={costs.lead_time_days}, "
         f"service_level_target={costs.service_level_target:.0%}, "
-        f"holding_cost_rate={costs.holding_cost_rate:.1%}, "
-        f"stockout_penalty_per_unit=${costs.stockout_penalty_per_unit:.2f}.",
+        f"holding_cost_rate={describe_holding_rate(costs.holding_cost_rate)}, "
+        f"stockout penalty="
+        + (
+            f"${costs.stockout_penalty_per_unit:.2f}/unit (flat)"
+            if costs.gross_margin is None
+            else f"{costs.gross_margin:.1%} of price (lost gross margin)"
+        )
+        + ".",
         "",
         "Two service measures are reported throughout: **fill rate** (units shipped ÷ units "
         "demanded) and **cycle service level** (share of replenishment cycles with no stockout "

@@ -380,6 +380,39 @@ def test_run_decision_backtest_and_report_smoke(monkeypatch):
     assert "total_cost" in report or "Total cost" in report.lower()
 
 
+def test_run_decision_backtest_lot_multiples_covers_every_lot_from_one_fit(monkeypatch):
+    """`run_deep_backtest.py` queues `S = s` and `S = s + 2 x lead-time demand` from a single
+    `run_decision_backtest` call (`lot_multiples=(0.0, 2.0)`) so an expensive model (NBEATS) is
+    fit only once — this pins that both lots actually reach `_simulate_policy`, tagged correctly
+    in both `results` and `detail`, for every fold/model/policy row."""
+    monkeypatch.setattr(bt, "MODEL_FACTORIES", {"Dummy": lambda horizon: _DummyModel()})
+    monkeypatch.setattr(bt, "N_SERIES_SAMPLE", 1)
+    monkeypatch.setattr(bt, "HORIZON", 4)
+    monkeypatch.setattr(bt, "N_FOLDS", 2)
+
+    dates = pd.date_range("2020-01-01", periods=120, freq="D")
+    panel = pd.DataFrame(
+        {
+            "series_id": ["A"] * len(dates),
+            "date": dates,
+            "y": [2.0] * len(dates),
+            "price": [10.0] * len(dates),
+        }
+    )
+    costs = _costs(lead_time_days=2)
+
+    results, detail = dec.run_decision_backtest(panel, costs, lot_multiples=(0.0, 2.0))
+
+    assert set(results["lot_multiple"]) == {0.0, 2.0}
+    assert set(detail["lot_multiple"]) == {0.0, 2.0}
+    base_detail = detail[detail["lot_multiple"] == 0.0]
+    lot_detail = detail[detail["lot_multiple"] == 2.0]
+    assert len(lot_detail) == len(base_detail) > 1  # every fold/model/policy row got both lots
+    # a positive mean forecast makes S strictly above s under the lot policy, everywhere
+    assert (lot_detail["order_up_to"] > lot_detail["reorder_point"]).all()
+    assert (base_detail["order_up_to"] == base_detail["reorder_point"]).all()
+
+
 # --- v1.1 Task 2: cycle service level and the fill-rate-targeted policy ---
 
 

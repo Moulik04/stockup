@@ -7,18 +7,25 @@ independent choices are baked into that, and v1.1 Task 5 separates them:
   symmetric normal lead-time demand. `empirical` takes the residual distribution's own quantile
   at the target service level, assuming nothing about its shape.
 - **Granularity** — how series are pooled. `intermittency` is the current two-bucket split
-  (>50% zero training days). `intermittency_volume` crosses that with volume terciles, six
-  buckets, so a high-volume and a low-volume SKU in the same intermittency class no longer
-  receive the same absolute buffer in units.
+  (>50% zero training days). `volume_tercile_within_intermittency` crosses that with volume
+  terciles — named for what it actually does here, not what it was designed to do: on this
+  panel, intermittency and volume are near-duplicate variables (every `regular` series is
+  already in the top volume tercile), so it only ever subdivides the `intermittent` class three
+  ways, not a clean 2x3. It was originally called `intermittency_volume`, a name that implied a
+  balanced six-cell cross this scheme never delivers; see `assign_buckets`' docstring and
+  `reports/safety_stock_<date>.md` for the measured population counts. `volume_quintile` pools
+  by volume alone — five balanced buckets carrying the same information (volume already implies
+  intermittency here), with none of the population collapse.
 
-Crossing them gives a 2x2, which is the only way to tell whether the service-level gap is about
-distributional shape, pooling granularity, or both.
+Crossing form with the first two granularities gives a 2x2; `volume_quintile` runs as a fifth
+cell (paired with the `normal` form only, since form was already shown not to matter — see the
+report) rather than doubling the grid to a 2x3.
 
 **The sample-size constraint is real and is reported, not worked around.** ~400 residuals per
 fold split two ways leaves ~200 per bucket, so a 95th percentile rests on ~10 tail observations;
-split six ways it is ~3. `bootstrap_quantile_ci` resamples the residuals to put a confidence
-interval on the quantile *itself*, so a buffer estimated from too few tail points is visibly
-uncertain rather than silently precise.
+split finer it is fewer still. `bootstrap_quantile_ci` resamples the residuals to put a
+confidence interval on the quantile *itself*, so a buffer estimated from too few tail points is
+visibly uncertain rather than silently precise.
 """
 
 from __future__ import annotations
@@ -28,10 +35,36 @@ import pandas as pd
 from scipy.stats import norm
 
 FORMS = ("normal", "empirical")
-GRANULARITIES = ("intermittency", "intermittency_volume")
+GRANULARITIES = ("intermittency", "volume_tercile_within_intermittency", "volume_quintile")
+# The scheme every result before 2026-09-20 calls "shipped" — the fixed reference the historical
+# comparisons ("finer scheme vs shipped") are made against. It never changes.
+LEGACY_SCHEME = ("normal", "intermittency")
+# The scheme `train.py` calibrates for serving and the harness sizes with by default. One constant,
+# so the two cannot disagree about which scheme is the default. Flipping the default is a change
+# here (and `make calibrate`); the historical comparisons stay pinned to LEGACY_SCHEME.
+DEFAULT_SCHEME = LEGACY_SCHEME
 INTERMITTENCY_THRESHOLD = 0.5
 N_BOOTSTRAP = 2000
 BOOTSTRAP_SEED = 0
+
+
+def train_stats(train: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    """(zero rate, mean daily volume) per series over a training window — the two bucketing
+    variables. Used by the backtest harness and by the production calibration alike."""
+    grouped = train.groupby("series_id")["y"]
+    return grouped.apply(lambda s: (s == 0).mean()), grouped.mean()
+
+
+def _qcut_ranked(vols: pd.Series, n: int, labels: list[str]) -> pd.Series:
+    """qcut on ranks, not raw values: mostly-zero demand produces heavily tied volumes, and
+    plain qcut refuses to cut when bin edges collide. Ranking first splits ties arbitrarily but
+    evenly, which is the intended "n equal-sized groups" rather than an error.
+    """
+    try:
+        cut = pd.qcut(vols.rank(method="first"), n, labels=labels)
+    except ValueError:
+        cut = pd.Series([labels[len(labels) // 2]] * len(vols), index=vols.index)
+    return pd.Series(cut, index=vols.index).astype(str)
 
 
 def assign_buckets(
@@ -42,12 +75,20 @@ def assign_buckets(
 ) -> pd.Series:
     """Per-series bucket label.
 
-    `intermittency` reproduces the existing two-bucket split exactly. `intermittency_volume`
-    crosses it with volume terciles computed *within the calibration window* (never using the
-    outcome period), giving at most six buckets.
+    `intermittency` reproduces the existing two-bucket split exactly.
+    `volume_tercile_within_intermittency` crosses it with volume terciles computed *within the
+    calibration window* (never using the outcome period) — at most six buckets, though on this
+    panel only the `intermittent` class actually splits (see the module docstring).
+    `volume_quintile` pools by volume alone, five balanced buckets, no intermittency dimension.
     """
     if granularity not in GRANULARITIES:
         raise ValueError(f"granularity must be one of {GRANULARITIES}, got {granularity!r}")
+
+    if granularity == "volume_quintile":
+        if volumes is None:
+            raise ValueError("volume_quintile granularity requires `volumes`")
+        vols = volumes.reindex(zero_rates.index)
+        return _qcut_ranked(vols, 5, ["q1", "q2", "q3", "q4", "q5"]).rename("bucket")
 
     intermittency = pd.Series(
         np.where(zero_rates > threshold, "intermittent", "regular"), index=zero_rates.index
@@ -56,16 +97,9 @@ def assign_buckets(
         return intermittency.rename("bucket")
 
     if volumes is None:
-        raise ValueError("intermittency_volume granularity requires `volumes`")
+        raise ValueError("volume_tercile_within_intermittency granularity requires `volumes`")
     vols = volumes.reindex(zero_rates.index)
-    # qcut on ranks: mostly-zero demand produces heavily tied volumes, and plain qcut refuses
-    # to cut when bin edges collide. Ranking first splits ties arbitrarily but evenly, which is
-    # the intended "three equal-sized groups" rather than an error.
-    try:
-        tercile = pd.qcut(vols.rank(method="first"), 3, labels=["lo", "mid", "hi"])
-    except ValueError:
-        tercile = pd.Series(["mid"] * len(vols), index=vols.index)
-    tercile = pd.Series(tercile, index=vols.index).astype(str)
+    tercile = _qcut_ranked(vols, 3, ["lo", "mid", "hi"])
     return (intermittency + "_" + tercile).rename("bucket")
 
 

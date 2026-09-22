@@ -11,8 +11,10 @@ is exactly this project's existing series_id (item x store) — no double-counti
 
 from __future__ import annotations
 
+import argparse
 import datetime as dt
 from collections.abc import Callable
+from pathlib import Path
 
 import pandas as pd
 from hierarchicalforecast.core import HierarchicalReconciliation
@@ -27,6 +29,10 @@ from reorderpoint.metrics import mase, rmsse
 
 PANEL_PATH = REPO_ROOT / "data" / "track_a" / "processed" / "panel.parquet"
 REPORTS_DIR = REPO_ROOT / "reports"
+# Phase 5 needs its own slice — stores CA_1/TX_1 across all three categories — which is *not* the
+# HOBBIES-only `panel.parquet` every other analysis uses. Built by `make data-reconcile`.
+RECONCILE_PANEL_PATH = PANEL_PATH.parent / "panel_reconcile.parquet"
+NODE_DETAIL_PATH = PANEL_PATH.parent / "reconciliation_node_detail.parquet"
 
 # 2 states (1 store each) keeps every category/department represented while staying close in
 # scale to the 400-series backtest sample — full store list would multiply compute ~5x for a
@@ -109,10 +115,14 @@ def metrics_by_level(
     level_of: pd.Series,
     forecast_col: str,
     season_length: int = SEASON_LENGTH,
+    node_sink: list[pd.DataFrame] | None = None,
 ) -> pd.DataFrame:
     """Per-level (mean MASE, mean RMSSE, n_nodes) for one forecast column, `merged` carrying
     columns series_id/date/y/`forecast_col` over the test period and `train` the history used
     for each node's in-sample scale.
+
+    `node_sink`, when given, receives the per-node table (series_id, mase, rmsse, level) before it
+    is averaged away — the paired bootstrap over nodes needs it (`reconcile_ci.py`).
     """
     rows = []
     for series_id, group in merged.groupby("series_id"):
@@ -133,6 +143,8 @@ def metrics_by_level(
     # KeyError instead of this function's caller just seeing "no nodes at this level" naturally.
     per_node = pd.DataFrame(rows, columns=["series_id", "mase", "rmsse"]).set_index("series_id")
     per_node["level"] = level_of.reindex(per_node.index)
+    if node_sink is not None:
+        node_sink.append(per_node.reset_index())
 
     return (
         per_node.groupby("level")
@@ -150,6 +162,7 @@ def evaluate_fold_reconciliation(
     S_df: pd.DataFrame,
     tags: dict,
     forecast_fn: ForecastFn = fit_forecast_with_fitted,
+    node_sink: list[pd.DataFrame] | None = None,
 ) -> pd.DataFrame:
     """One fold, every hierarchy node at once: fit -> forecast+fitted -> reconcile -> per-level
     (mase, rmsse, n_nodes) for the unreconciled base forecast, BottomUp, and MinTrace.
@@ -174,18 +187,25 @@ def evaluate_fold_reconciliation(
 
     frames = []
     for method_name, col in method_cols.items():
-        level_metrics = metrics_by_level(merged, train, lookup, forecast_col=col)
+        fold_nodes: list[pd.DataFrame] = []
+        level_metrics = metrics_by_level(
+            merged, train, lookup, forecast_col=col, node_sink=fold_nodes
+        )
         level_metrics["method"] = method_name
         level_metrics["fold"] = fold.index
         frames.append(level_metrics)
+        if node_sink is not None:
+            node_sink.append(fold_nodes[0].assign(method=method_name, fold=fold.index))
     return pd.concat(frames, ignore_index=True)
 
 
 def run_reconciliation_experiment(
-    panel: pd.DataFrame, forecast_fn: ForecastFn = fit_forecast_with_fitted
+    panel: pd.DataFrame,
+    forecast_fn: ForecastFn = fit_forecast_with_fitted,
+    node_sink: list[pd.DataFrame] | None = None,
 ) -> pd.DataFrame:
     """Returns per (fold, level, method) metrics across every fold — the source table for
-    `write_reconciliation_report`.
+    `write_reconciliation_report`. `node_sink` collects the per-node tables behind it.
     """
     bottom_panel = bt.sample_series(
         panel[panel["store_id"].isin(STORE_IDS)], N_SERIES_SAMPLE, seed=SAMPLE_SEED
@@ -193,7 +213,10 @@ def run_reconciliation_experiment(
     Y_df, S_df, tags = build_hierarchy(bottom_panel)
     folds = bt.make_folds(Y_df, horizon=HORIZON, n_folds=N_FOLDS)
 
-    frames = [evaluate_fold_reconciliation(Y_df, fold, S_df, tags, forecast_fn) for fold in folds]
+    frames = [
+        evaluate_fold_reconciliation(Y_df, fold, S_df, tags, forecast_fn, node_sink)
+        for fold in folds
+    ]
     return pd.concat(frames, ignore_index=True)
 
 
@@ -271,14 +294,24 @@ def write_reconciliation_report(results: pd.DataFrame) -> str:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Hierarchical reconciliation experiment.")
+    parser.add_argument("--panel", type=Path, default=RECONCILE_PANEL_PATH)
+    args = parser.parse_args()
+    panel_path = args.panel
+    if not panel_path.exists():
+        raise SystemExit(f"{panel_path} not found — run `make data-reconcile` first")
+
     # Filtered at parquet-read time (predicate pushdown), not after loading — the full panel is
     # ~11.7GB in memory (all 30,490 series), more than this project's dev machine has; reading
     # only STORE_IDS up front means the full frame is never materialized.
-    panel = pd.read_parquet(PANEL_PATH, filters=[("store_id", "in", STORE_IDS)])
+    panel = pd.read_parquet(panel_path, filters=[("store_id", "in", STORE_IDS)])
     panel["date"] = pd.to_datetime(panel["date"])
 
-    results = run_reconciliation_experiment(panel)
+    node_sink: list[pd.DataFrame] = []
+    results = run_reconciliation_experiment(panel, node_sink=node_sink)
     report = write_reconciliation_report(results)
+    # per-node metrics behind the level averages — what `reconcile_ci.py` bootstraps over
+    pd.concat(node_sink, ignore_index=True).to_parquet(NODE_DETAIL_PATH, index=False)
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     date_str = dt.date.today().isoformat()

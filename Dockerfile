@@ -20,6 +20,10 @@ RUN uv sync --frozen --no-dev
 # models/production/lightgbm.joblib on the host (or in a build stage of your own) before
 # building; this image does not bundle the M5 dataset or retrain on start (see docs/serving.md).
 COPY models/production/lightgbm.joblib ./models/production/lightgbm.joblib
+# The fitted safety-stock calibration `/reorder` sizes with (written by `make train` /
+# `make calibrate`). Without it the API returns 503 rather than falling back to the raw
+# quantile-derived sizing Phase 4 showed loses — see docs/serving.md.
+COPY models/production/safety_stock_calibration.joblib ./models/production/safety_stock_calibration.joblib
 COPY data/track_a/processed/panel.parquet ./data/track_a/processed/panel.parquet
 
 EXPOSE 8000

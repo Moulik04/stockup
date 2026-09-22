@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from reorderpoint import serve
+from reorderpoint.calibration import SafetyStockCalibration
 from reorderpoint.config import Config, CostParams
 
 
@@ -49,12 +50,28 @@ def _config() -> Config:
     )
 
 
+def _calibration() -> SafetyStockCalibration:
+    residuals = pd.DataFrame(
+        {"residual": [3.0, -2.0], "zero_rate": [0.2, 0.2], "volume": [2.0, 2.0]},
+        index=pd.Index(["A", "B"], name="series_id"),
+    )
+    return SafetyStockCalibration(
+        form="normal",
+        granularity="intermittency",
+        lead_time_days=7,
+        model_name="LightGBM",
+        calibrated_through=pd.Timestamp("2020-02-29"),
+        residuals=residuals,
+    )
+
+
 @pytest.fixture
 def client():
     app = serve.app
     app.dependency_overrides[serve.get_model] = lambda: _DummyModel()
     app.dependency_overrides[serve.get_history] = _panel
     app.dependency_overrides[serve.get_config] = _config
+    app.dependency_overrides[serve.get_calibration] = _calibration
     yield TestClient(app)
     app.dependency_overrides.clear()
 

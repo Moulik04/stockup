@@ -105,12 +105,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Ingest raw data into the canonical panel.")
     parser.add_argument("--store-ids", nargs="*", default=None)
     parser.add_argument("--cat-ids", nargs="*", default=["HOBBIES"])
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="write here instead of the canonical panel.parquet (Track A only) — lets a "
+        "different slice, e.g. reconcile's 2-store x 3-category one, sit beside the panel every "
+        "other analysis is built on instead of replacing it",
+    )
     args = parser.parse_args()
 
     config = load_config()
     if config.track == "a":
         panel = load_track_a(TRACK_A_RAW_DIR, store_ids=args.store_ids, cat_ids=args.cat_ids)
-        out_path = TRACK_A_PROCESSED
+        out_path = args.out or TRACK_A_PROCESSED
     else:
         if not config.track_b_data_path:
             raise SystemExit("REORDERPOINT_TRACK=b but TRACK_B_DATA_PATH is not set in .env")

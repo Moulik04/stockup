@@ -16,12 +16,37 @@ start — retraining LightGBM on every request would make the API too slow to be
 - `GET /health` — liveness check.
 - `POST /forecast` — `{"series_ids": [...], "horizon": 28}` → P10/P50/P90 for each series/day.
 - `POST /reorder` — `{"series_ids": [...], "on_hand": {"series_id": qty, ...}}` → reorder point,
-  safety stock, order quantity, stockout probability, and a rationale per series (the same
-  `reorderpoint.decision.compute_decisions` policy documented in `docs/decision.md`). Any
+  safety stock, order quantity, stockout probability, and a rationale per series (the policy in
+  `docs/decision.md`, sized with the **calibrated** safety stock below). Any
   series_id missing from `on_hand` defaults to 0 (Track A has no live inventory feed to draw a
   better default from).
 - `GET /metrics` — a small JSON snapshot (series count, panel's last known date, active cost
   config) — not full Prometheus instrumentation, which this project doesn't need yet.
+
+### Safety-stock calibration (`models/production/safety_stock_calibration.joblib`)
+
+Serving used to size safety stock as `z · σ` with σ read off the model's own P10/P90 width — the
+method Phase 4 showed loses — while every result in the README was measured with the calibrated
+sizing the backtest harness uses (pooled realised forecast residuals, `reorderpoint/safety_stock.py`).
+`reorderpoint/calibration.py` closes that gap. `make train` (or `make calibrate`, which leaves the
+persisted model alone) holds out the panel's last `lead_time_days`, fits the model on everything
+before, forecasts the held-out window **with the same proxy future-exog serving uses**, and persists
+the per-series lead-time-demand residuals with the two bucketing variables (zero rate, volume). The
+residuals are stored, not a buffer, so the same artifact sizes for any `SERVICE_LEVEL_TARGET`.
+`serve.size_decisions` — the single entry point for `/reorder`, `make score` and the dashboard —
+applies it through `decision.calibrated_reorder_decision`, the function the harness also calls
+(`tests/test_serving_calibration.py` pins the two to the same reorder point for the same series
+and forecast).
+
+- **No silent fallback.** If the artifact is missing, `/reorder` returns 503; a calibration fitted
+  for a different lead time returns 409. The old raw sizing is not served in either case.
+- **One scheme constant.** `safety_stock.DEFAULT_SCHEME` names the scheme both the harness and
+  `train.py` use; switching the default is a change to it plus `make calibrate`.
+- **Limits.** One calibration window (one residual per series, pooled across ~5.6k series into two
+  buckets), so tail estimates rest on that window; and it goes stale as the model does — re-run
+  `make calibrate` whenever `make train` is. `GET /metrics` reports the calibration's scheme, date
+  and size. On the real model the calibrated buffer averages 2.0× the raw one (6.2 vs 3.1 units;
+  higher for 93% of series).
 
 `make score` (`serve.py --batch`) runs the same `/reorder` logic over **every** series in the
 panel and writes `outputs/reorder_<date>.csv` — a batch-job path that shares all its logic with
@@ -51,7 +76,7 @@ the container's startup fast (the acceptance bar is "answers `/reorder` correctl
 model on boot").
 
 ```bash
-make train                                    # writes models/production/lightgbm.joblib
+make train                                    # writes lightgbm.joblib + safety_stock_calibration.joblib
 docker build -t reorderpoint .
 docker run -p 8000:8000 reorderpoint
 curl -X POST localhost:8000/reorder -H 'content-type: application/json' \

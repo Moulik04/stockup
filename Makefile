@@ -1,4 +1,4 @@
-.PHONY: setup data data-full eda backtest divergence decide safety-stock reconcile train score serve dashboard test lint format
+.PHONY: setup data data-full data-reconcile eda backtest divergence decide safety-stock service-level holding-sensitivity breakeven optimal-target penalty holdout reconcile train calibrate score serve dashboard test lint format
 
 setup:
 	uv sync
@@ -15,6 +15,11 @@ data-full:
 	uv run python scripts/download_m5.py
 	uv run python -m reorderpoint.ingest --cat-ids HOBBIES HOUSEHOLD FOODS
 
+# The slice Phase 5's reconciliation runs on (stores CA_1/TX_1, all three categories), written
+# beside — not over — the HOBBIES panel every other target uses.
+data-reconcile:
+	uv run python -m reorderpoint.ingest --store-ids CA_1 TX_1 --cat-ids HOBBIES HOUSEHOLD FOODS --out data/track_a/processed/panel_reconcile.parquet
+
 eda:
 	uv run jupyter nbconvert --to notebook --execute --inplace notebooks/eda.ipynb
 	uv run jupyter nbconvert --to markdown notebooks/eda.ipynb --output-dir reports --output eda
@@ -29,16 +34,51 @@ divergence:
 decide:
 	uv run python -m reorderpoint.decision
 
-# 2x2 ablation: {normal, empirical} x {2-bucket, 6-bucket} safety-stock calibration.
+# Safety-stock calibration ablation: 2x2 of {normal, empirical} x {intermittency,
+# volume_tercile_within_intermittency} plus a volume_quintile cell, with bootstrap CIs.
 # Reuses the forecast cache from `make divergence`, so it costs simulations, not backtests.
 safety-stock:
 	uv run python -m reorderpoint.ablate_safety_stock
 
+# Cost-optimal service level: critical ratio + cost-vs-target sweep (0.80-0.999).
+service-level:
+	uv run python -m reorderpoint.service_level_sweep
+
+# Re-prices the stored runs at four readings of `holding_cost_rate` (2%/day, 2%/month, 2%/year, 25%/yr):
+# does the model cost ranking, the calibration-scheme win, or the optimal service level move?
+holding-sensitivity:
+	uv run python -m reorderpoint.holding_sensitivity
+
+# Solves for the holding rate at which LightGBM and SeasonalNaive cost the same (~364%/yr), checks it
+# three independent ways, and writes the cost-vs-rate chart the README and dashboard are built on.
+breakeven:
+	uv run python -m reorderpoint.holding_breakeven
+
+# Extends the service-target grid to 99.9999%, reports the critical ratio and the cost-optimal
+# target, and re-runs the model comparison there with bootstrap CIs (reports/optimal_target_*.md).
+optimal-target:
+	uv run python -m reorderpoint.optimal_target
+
+# Ranking sensitivity to the stockout penalty (lost margin) and the service target
+# (reports/penalty_sensitivity_*.md). Run `make optimal-target` first.
+penalty:
+	uv run python -m reorderpoint.penalty_sensitivity
+
+# Picks the service-level target on folds 1-3 only and scores it on the held-out final fold.
+holdout:
+	uv run python -m reorderpoint.holdout_target
+
 reconcile:
 	uv run python -m reorderpoint.reconcile
+	uv run python -m reorderpoint.reconcile_ci
 
 train:
 	uv run python -m reorderpoint.train
+
+# Refit only the safety-stock calibration `make serve` sizes with (models/production/
+# safety_stock_calibration.joblib), leaving the persisted model as is. `make train` does both.
+calibrate:
+	uv run python -m reorderpoint.train --calibration-only
 
 score:
 	uv run python -m reorderpoint.serve --batch
@@ -50,12 +90,12 @@ dashboard:
 	uv run streamlit run reorderpoint/dashboard.py
 
 test:
-	uv run pytest
+	uv run python -m pytest
 
 lint:
-	uv run ruff check .
-	uv run black --check .
+	uv run python -m ruff check .
+	uv run python -m black --check .
 
 format:
-	uv run ruff check --fix .
-	uv run black .
+	uv run python -m ruff check --fix .
+	uv run python -m black .
