@@ -1,4 +1,4 @@
-.PHONY: setup data data-full data-reconcile eda backtest divergence decide safety-stock service-level holding-sensitivity breakeven optimal-target penalty holdout reconcile train calibrate score serve dashboard test lint format
+.PHONY: setup data data-full data-reconcile eda backtest divergence decide safety-stock service-level holding-sensitivity breakeven optimal-target penalty holdout croston reconcile train calibrate score serve dashboard test lint format
 
 setup:
 	uv sync
@@ -67,6 +67,13 @@ penalty:
 # Picks the service-level target on folds 1-3 only and scores it on the held-out final fold.
 holdout:
 	uv run python -m reorderpoint.holdout_target
+
+# The Croston family (CrostonClassic, CrostonSBA, TSB) — added to the model registry, scored on
+# accuracy and, under the shipped S = s + 2 x lead-time demand policy, on decision cost, per
+# intermittency bucket with bootstrap CIs (reports/croston_*.md). Extends the forecast/calibration
+# caches with just these three models; the five already there are not re-fit.
+croston:
+	uv run python -m reorderpoint.croston
 
 reconcile:
 	uv run python -m reorderpoint.reconcile

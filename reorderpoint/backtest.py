@@ -16,7 +16,7 @@ import pandas as pd
 
 from reorderpoint.config import REPO_ROOT
 from reorderpoint.metrics import coverage, pinball_loss, weighted_average
-from reorderpoint.models import lightgbm_global, naive, statistical
+from reorderpoint.models import croston, lightgbm_global, naive, statistical
 
 PANEL_PATH = REPO_ROOT / "data" / "track_a" / "processed" / "panel.parquet"
 REPORTS_DIR = REPO_ROOT / "reports"
@@ -39,6 +39,15 @@ MODEL_FACTORIES = {
     "AutoETS": statistical.auto_ets,
     "AutoTheta": statistical.auto_theta,
     "LightGBM": lightgbm_global.lightgbm_global,
+    # v1.1 Task 4: the models built for intermittent demand, added after the fact — the ladder's
+    # most obvious gap on a 77%-zero panel. See reorderpoint/models/croston.py and
+    # reports/croston_*.md. Every downstream script that loops over MODEL_FACTORIES (divergence,
+    # ablate_safety_stock, decision, order_up_to) picks these up automatically; scripts that
+    # hardcode their own model list (optimal_target.MODELS, holding_sensitivity.MODELS) do not,
+    # by design — they reproduce dated reports written before this family existed.
+    "CrostonClassic": croston.croston_classic,
+    "CrostonSBA": croston.croston_sba,
+    "TSB": croston.tsb,
 }
 
 

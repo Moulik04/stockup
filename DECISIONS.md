@@ -940,10 +940,10 @@ meant to be a public portfolio piece.
 
 **Findings:** the business's real trading name appeared in `data/track_b/README.md`;
 `.env.example` referenced "MJ's business data export" and "must come from MJ"; `docs/bridges2.md`
-and three `scripts/bridges2/*` files hardcoded MJ's real PSC username and allocation ID
-; several files (dashboard.py, two historical reports) had dangling references to
-this very `DECISIONS.md` file, which is intentionally not part of the public repo, making those
-citations broken/confusing to a public reader.
+and three `scripts/bridges2/*` files hardcoded MJ's real PSC username and allocation ID; several
+files (dashboard.py, two historical reports) had dangling references to this very `DECISIONS.md`
+file, which is intentionally not part of the public repo, making those citations
+broken/confusing to a public reader.
 
 **Decision:** Forward-fix all current files first (business name → "the business"/"the business
 owner", hardcoded PSC identifiers → `$USER`/`$PSC_ALLOCATION` env vars with a `:?` guard in the
@@ -1853,3 +1853,98 @@ target before it (sampling CI, held-out confirmation, interior-minimum check) �
 "acceptance bars need an uncertainty criterion" rule (2026-09-20 entry) applied to itself. The NBEATS
 re-test is scaffolded and correctness-checked but unexecuted; whoever runs it next gets a report for
 free and doesn't have to reconstruct the hypothesis from GPU logs.
+
+## 2026-09-23 — v1.1 close-out: divergence synthesis, Croston family, MinTrace status verified, second privacy pass
+
+**Context:** MJ asked for four things before v1.1 closes: (1) a second privacy pass on
+`REORDERPOINT_MASTER_PROMPT.md`, specifically indirect identifiers, plus confirming it never
+entered git history and gitignoring it; (2) Task 1's divergence result written into "The finding"
+next to the four-reversal table, since it was computed but never connected to the synthesis;
+(3) Task 4, the Croston family, which was in v1.1's definition of done and never built; (4)
+confirming Task 9 (MinTrace demotion) actually landed everywhere, not just in the Results section.
+
+**1. Privacy pass — found a live leak bigger than the one asked about.** Checking
+`REORDERPOINT_MASTER_PROMPT.md`'s git history (`git log -p --all`) showed it only ever existed in
+one, unpushed, local commit — already generic (no business name/PSC identifiers), so the specific
+"never entered git history" risk did not apply to it. But the file itself still had two indirect
+identifiers MJ flagged (Track B's "summer peak" seasonality note, and "a reorder table for next
+season") — genericized to "a single well-defined peak season" and "the upcoming replenishment
+cycle." Both master prompts (`REORDERPOINT_MASTER_PROMPT.md`, `STOCKUP_V1_1_MASTER_PROMPT.md`)
+gitignored, matching the LedgerQL convention MJ pointed to (kept untracked as private briefs,
+mirrored into this file instead).
+
+Widening the check to "is anything already public that shouldn't be" (the actual bar MJ set — a
+second pass, not just the one file) found a real, currently-live leak the 2026-09-11 audit missed:
+`data/track_b/README.md`'s seasonality note still named the literal product category, live on
+`origin/main` — and `tests/fixtures/track_b_sample.csv`'s SKU values were built on the same word
+the scrubbed business name was. Neither file was touched by the 2026-09-11 rewrite, which only
+removed the name and the PSC identifiers.
+Separately, this session's own `DECISIONS.md` — being tracked and pushed for the first time as part
+of this release — still quoted the literal business name, PSC username and allocation ID verbatim
+in its own audit-trail entry describing their removal; redacted before it could become a second,
+brand-new leak of the same three strings.
+
+**Decision:** forward-fixed `data/track_b/README.md` (generic seasonality note, no category word)
+and the fixture (`SKU-100`/`SKU-200`), confirmed by `grep` that no tracked file mentions the product
+category anywhere (only this entry's own now-redacted description of the earlier leak, which no
+longer contains the underlying strings). Asked MJ how to handle the two already-public files given
+the severity; MJ chose the same treatment as 2026-09-11 — forward-fix plus a `git filter-repo`
+history rewrite and force-push — over a forward-fix-only option that would leave the literal strings
+recoverable from old commits/forks.
+
+**2. Divergence synthesis, added next to the four-reversal table.** The Task 1 divergence report
+(`reports/model_divergence_2026-09-15.md`) existed but "The finding" never referenced it — the
+report the synthesis was supposed to be built on was sitting unused. Added a paragraph directly
+after the four-reversal table: every reversal is SeasonalNaive vs. the rest, never a contest inside
+the four-model cluster that pairwise-correlates >0.95 (0.934–0.979) on P50 forecasts; SeasonalNaive
+sits below that line against everything else (0.655–0.704 pooled, 96% of mean demand different from
+LightGBM's forecast). Reading against MJ's two pre-stated branches: this is closer to the second
+(real, meaningful divergence — SeasonalNaive genuinely differs) than the first (near-total
+interchangeability), but the punchline is the same either way — even a genuine, non-noise forecast
+difference is worth roughly 11x less than the policy it's evaluated under. Stated as the mechanism
+behind the reversal table, not a separate finding bolted on beside it.
+
+**3. Task 4 — the Croston family, built.** `CrostonClassic`, `CrostonSBA`, `TSB`
+(`reorderpoint/models/croston.py`, same conformal-interval wrapper every other statistical baseline
+uses; TSB's smoothing pair, 0.1/0.1, is the Teunter-Syntetos-Babai (2011) reference value, stated not
+tuned) added to `bt.MODEL_FACTORIES` — the one registry every downstream script (divergence,
+ablate_safety_stock, decision, order_up_to) already loops over, so the family is live everywhere
+that matters without a single model-specific branch anywhere in that call chain.
+
+Ran them at full scale (400 series x 4 folds) rather than accepting the scheme-comparison sweep's
+cost of re-running: `reorderpoint/croston.py` extends the two shared caches
+(`divergence.FORECASTS_PATH`, the fold-1 calibration residuals) by fitting only the three new
+models — the five already cached are read back unchanged, not re-fit, so nothing already published
+was put at risk of numeric drift. Decision cost is scored at exactly one cell,
+`ab.run_cell(..., "normal", "intermittency", lot_multiple=2.0, service_level=0.95)` — the policy
+actually shipped — rather than regenerating `order_up_to.py`'s full 70-cell sweep, which this task
+doesn't need and which would have cost significant extra compute for cells nothing here reads.
+
+**Result** (`reports/croston_2026-09-23.md`): on accuracy the family lands inside the existing
+four-model cluster (TSB best at 1.531 MASE, against AutoTheta 1.524–LightGBM 1.587), the same
+RMSSE-clustering Task 1 already explained, not a new effect. On decision cost under the shipped
+policy, all three beat SeasonalNaive with a bootstrap CI excluding zero (CrostonSBA cheapest at
+$441/fold vs. SeasonalNaive $526) and none is distinguishable from LightGBM ($427). A rung
+that was expected, going in, to plausibly lose outright instead lands as a real, evidenced tie with
+the production model — consistent with the 2026-09-23 synthesis (#2 above): once the decision layer
+dominates, forecasters that produce sufficiently-similar demand signals end up priced similarly too.
+README's "Results" and the architecture diagram updated; `make croston` added.
+
+**4. Task 9 verified — one overclaim found and fixed.** The Results section's reconciliation
+subsection already read correctly (restated as "not distinguishable from zero," positioned after
+every headline decision-cost result, labelled as run on AutoETS/non-production). But the top-of-
+README status blockquote still said "MinTrace reconciliation helps modestly at the most granular
+hierarchy levels" — the pre-CI framing, contradicting the CI-corrected conclusion three screens
+below it. Fixed to match: "MinTrace reconciliation's item-level gain (Phase 5, run on AutoETS, not
+the production model) does not survive a bootstrap."
+
+**Verification:** full suite still green (219 tests — no new tests added; `models/croston.py`'s
+factories are thin `StatsForecastQuantileModel` wrappers covered by the same generic clip-logic
+test the other statistical baselines rely on, `test_models_base.py`, matching the existing
+convention that individual statsforecast model factories don't get dedicated tests). `ruff check`
+and `black --check` clean on every new/changed file.
+
+**Consequence:** the two already-public files and the git history rewrite are the one piece of this
+entry not yet executed at time of writing — queued immediately after, pending MJ's confirmation
+already given. Everything else (Croston, the synthesis paragraph, the MinTrace fix, the master-
+prompt genericization and gitignoring) is complete and verified.

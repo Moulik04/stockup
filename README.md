@@ -49,6 +49,23 @@ only the policy and the pricing changed underneath them:
 | realistic holding (25%/yr) + lost-margin pricing | SeasonalNaive |
 | `S = s + 2 × lead-time demand`, `lot_multiple = 2` | LightGBM |
 
+**Why policy dominates: the forecasts behind every flip.** Every reversal in that table is a
+contest between SeasonalNaive and the rest, never a contest inside "the rest" — and that split is
+exactly what forecast divergence predicts. Pairwise Pearson correlation of the five models' P50
+forecasts ([`reports/model_divergence_2026-09-15.md`](reports/model_divergence_2026-09-15.md))
+puts MovingAverage, AutoETS, AutoTheta and LightGBM above 0.95 on every pair (0.934–0.979) — near-
+interchangeable, which is why the model comparison inside that cluster is small (the $99/fold
+LightGBM–SeasonalNaive gap under the repaired policy dwarfs anything measured between LightGBM and
+AutoETS/AutoTheta, which the CIs above call a tie). SeasonalNaive sits below the line against
+every other model (0.655–0.704 pooled, and its forecasts differ from LightGBM's by 96% of their
+own mean demand — practically a different forecast, not a noisy copy). **That is the mechanism
+behind the table: the four reversals are not close calls resolved by a small policy nudge, they
+are a policy repeatedly changing which side of one real forecast difference gets rewarded.** The
+~11× magnitude gap is what happens when the one difference that is real (SeasonalNaive vs.
+everything else) is worth an order of magnitude less than the policy it is evaluated under — real
+differences, but ones that wash out next to the decision layer, not an illusion of difference to
+begin with.
+
 Every flip was a decision-layer or parameter change — the sizing formula, the holding rate, or the
 ordering policy — never the models. **Under the policy actually shipped, LightGBM wins by $99 per
 fold [$34, $160], and that ranking is robust across the plausible holding-rate range (no crossover at
@@ -135,8 +152,9 @@ policy it can defend. That is the case for Track B (real costs), and for the das
 > up to `s + 2 × lead-time demand` instead of just `s`** (`/reorder`, `make score` and the
 > dashboard; it previously used the raw quantile-derived method Phase 4 showed loses, and the `S =
 > s` policy shown here to lose on cost — see "Where it fails"). LightGBM is the model served, and
-> under the repaired policy it is now also the cheapest. MinTrace reconciliation helps modestly at
-> the most granular hierarchy levels (Phase 5); a FastAPI service, batch scoring, Docker image, CI,
+> under the repaired policy it is now also the cheapest. MinTrace reconciliation's item-level gain
+> (Phase 5, run on AutoETS, not the production model) does not survive a bootstrap; a FastAPI
+> service, batch scoring, Docker image, CI,
 > monitoring, and a Streamlit dashboard sit on top of it (Phase 6) — see "Results" and
 > [`docs/serving.md`](docs/serving.md).
 
@@ -182,6 +200,7 @@ make safety-stock # 2x2 safety-stock calibration ablation, writes reports/safety
 make breakeven  # solve the holding rate where LightGBM/SeasonalNaive cost the same; writes the chart
 make optimal-target # critical ratio + extended service-target grid; ranking at the cost-optimum
 make penalty    # ranking sensitivity to the lost-sale cost and the service target
+make croston    # Croston family (Classic/SBA/TSB), accuracy + shipped-policy cost by bucket
 make data-full  # full M5, all 3 categories — needed for reconcile
 make reconcile  # hierarchical reconciliation experiment, writes reports/reconciliation_<date>.md
 make train      # fit + persist the production LightGBM model and its safety-stock calibration
@@ -202,7 +221,7 @@ Docker: `make train && docker build -t stockup . && docker run -p 8000:8000 stoc
 
 ```
 raw data → ingest → canonical long table → feature pipeline (point-in-time safe)
-    → model registry (naive → statistical → global LightGBM → [deep])
+    → model registry (naive → statistical → Croston family → global LightGBM → [deep])
     → rolling-origin backtester → quantile forecasts (P10/P50/P90)
     → decision layer (reorder point, safety stock, order qty, cost sim)
     → FastAPI + Streamlit, with drift/accuracy monitoring
@@ -294,6 +313,23 @@ ranking. Note the mechanism behind the SeasonalNaive win: LightGBM's fill rate i
 (CI [−2.8, −0.6]), so it wins by holding less stock, not by serving more demand. **These intervals
 hold at the legacy 2%/day only** — at 25%/yr, 2%/month or 2%/year the sign against SeasonalNaive
 reverses (see "Holding cost" below).
+
+**The Croston family (v1.1 Task 4).** The modelling ladder never included the models built for
+intermittent demand — the first gap a forecasting specialist would name on a 77%-zero panel.
+`CrostonClassic`, `CrostonSBA` and `TSB` (`statsforecast`, same conformal-interval wrapper as the
+other statistical baselines) are now in the registry, run through the same backtest and, under the
+policy actually shipped (`S = s + 2 × lead-time demand`, 95% target), the same decision-cost
+simulation as every other model —
+[`reports/croston_2026-09-23.md`](reports/croston_2026-09-23.md). On accuracy they land inside the
+existing four-model cluster (TSB best of the three at 1.531 MASE, against AutoTheta 1.524 /
+LightGBM 1.587) — the same RMSSE-clustering the divergence analysis above already explains, not a
+new effect. On decision cost, all three beat SeasonalNaive with a bootstrap CI excluding zero
+(CrostonSBA cheapest at $441/fold vs. SeasonalNaive $526) and none is distinguishable from
+LightGBM ($427) — under the shipped policy the family is a real, evidenced alternative to
+LightGBM, not a rung that quietly loses. Given the synthesis above (policy dominates model choice
+by roughly an order of magnitude), that is closer to the expected outcome than a surprise: the
+four models already in the accuracy cluster and the Croston family land in the same place because
+the decision layer, not the forecaster, is doing most of the work either way.
 
 **Two service measures (v1.1).** `service_level_target = 0.95` is a *cycle service level* — the
 probability of surviving a replenishment cycle without a stockout — while this table has always
