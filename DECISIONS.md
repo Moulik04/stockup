@@ -2176,3 +2176,32 @@ agreement on lead-time totals, and the report now says so itself.
 generated report — the artifact size ("a few kilobytes"; it is about 1 MB) and the reorder point's
 coverage ("95–96%"; LightGBM is 94.8%). Both were fixed by reading the draft against the table, not
 the memory of it, which is the same lesson as the two README overclaims above.
+
+**Addendum (2026-09-29, later): the coupling removed, the image fixed, two things measured.**
+- *Serving no longer loads the ladder.* `backtest.MODEL_FACTORIES` builds each model on first use and
+  `models/base.py` imports statsforecast inside `fit`, so `import reorderpoint.serve` leaves lightgbm,
+  statsforecast and numba unloaded (`tests/test_serve_imports.py`, fresh interpreter). This corrects
+  "What it does not buy" above. The 110 MB `lightgbm.joblib` is deleted.
+- *A side effect that only showed up in the full suite.* The lazy registry changed import order and
+  a LightGBM fit began to segfault after `hierarchicalforecast.core` had been imported first
+  (reproducible outside pytest). `hierarchicalforecast` is only imported by `reconcile.py`, which never
+  fits LightGBM, so no production script is affected; `tests/conftest.py` imports lightgbm first to
+  pin the order for the one process that runs both. The mechanism (two OpenMP runtimes) is a guess;
+  the ordering that avoids it is verified.
+- *The image did not build, before or after my change.* `uv sync` on the full dependency set fails on
+  `python:3.13-slim` (statsforecast 2.0.1: no Python 3.13 wheel, needs `c++`), on linux/arm64 and
+  linux/amd64 alike, so "image size before and after" has no "before". The README's `docker build`
+  path had been broken, and my earlier claim about the image was written without building it. Fixed
+  with a `serve` dependency group and `uv sync --only-group serve`. Built and run: 695.1 MB without
+  `libgomp1` against 696.7 MB with it (a 1.5 MB difference — the size case for dropping it is small;
+  the case is that nothing loads it); the container answers `/health`, `/metrics`, `/reorder` and
+  `/forecast` with the same numbers as the local run. Nothing in CI builds the image, which is how
+  it stayed broken.
+- *Do the clustered models err by similar amounts?* Pooled lead-time residual σ from the fold-1
+  calibration, per bucket. Intermittent (358 series): LightGBM 2.62, MovingAverage 2.85, AutoETS 2.76,
+  AutoTheta 2.76 — a spread of 8.9%; MovingAverage/LightGBM 1.09 [0.98, 1.21], not distinguishable
+  from 1. Regular (42 series): 10.2–11.8, a 15% spread, on too few series to say much (MovingAverage/
+  LightGBM 0.90 [0.83, 0.99]). SeasonalNaive is +21% against LightGBM in both. So the σ are close but
+  not within a few percent, and the README makes no claim that similar errors are the mechanism behind
+  the cost tie. The buffers they imply differ by about the same 5–15%, which sits inside the ±10% cost
+  interval, so this is consistent with the tie without explaining it.

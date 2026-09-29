@@ -1,20 +1,31 @@
 # Changelog
 
-## Unreleased (v1.2)
+## v1.2.0 — 2026-09-29
 
-The served system now shows the uncertainty it acts on, and runs a much simpler model.
+The served system now shows the uncertainty it acts on, runs a much simpler model, and no longer
+loads the model ladder.
 
 ### Changed
 
 - **Displayed intervals match the decision.** `/forecast` and the dashboard's fan chart used the
   model's own P10/P90; the reorder point is sized from calibrated pooled residuals, so the band and
   the decision disagreed about uncertainty. The band is now `P50 ± z(0.9) · σ / √lead_time_days`
-  from that same calibration (`SafetyStockCalibration.calibrated_interval`). `/forecast` now
-  returns 503 without the calibration, like `/reorder`.
-- **Served model: trailing 28-day mean** (`TrailingMeanModel`, the ladder's MovingAverage rung)
-  instead of LightGBM. Cost-tied with LightGBM under the shipped policy (paired bootstrap), same
-  forecast as the ladder's MovingAverage (checked row for row), no features, no forward-exog
-  proxy, about 1 MB instead of ~110 MB. The artifact moves to `models/production/model.joblib`;
+  from that same calibration (`SafetyStockCalibration.calibrated_interval`), clipped at zero.
+  Held out, the reorder point covered realised lead-time demand in 94.8–95.1% of windows against its
+  95% target. `/forecast` now returns 503 without the calibration, like `/reorder`, and 409 when the
+  calibration was fitted for a different model than the one served.
+- **Serving no longer loads the model ladder.** The registry imports each model on first use, so
+  importing `reorderpoint.serve` leaves lightgbm, statsforecast and numba unloaded (tested in a fresh
+  interpreter). The Docker image installs only a new `serve` dependency group, needs no `libgomp1`,
+  and builds: the previous Dockerfile did not (statsforecast has no Python 3.13 wheel).
+- **Production model switched to a 28-day moving average** (`TrailingMeanModel`, the ladder's
+  MovingAverage rung) instead of LightGBM. The evidence is a tie, not a win: under the shipped
+  policy it costs +$11 per fold against LightGBM [−$34, +$51] (paired bootstrap, series resampled;
+  the interval is about ±10% of cost, so a difference of that size is not ruled out), and every other
+  model tested is tied with LightGBM too. Same forecast as the ladder's MovingAverage (checked row
+  for row), fit + predict 0.1 s against 23 s on the 400-series fold, no features, no forward-exog
+  proxy, about 1 MB instead of ~110 MB. It gives up a day-to-day shape and any response to price or
+  event columns. The artifact moves to `models/production/model.joblib`;
   rerun `make train` (it also refits the calibration, which must follow the model).
 - A series the calibration never saw takes the pooled buffer, not a model-quantile fallback the
   served model cannot supply.

@@ -103,6 +103,13 @@ the `Dockerfile` copies in alongside the processed `panel.parquet`. This keeps t
 the container's startup fast (the acceptance bar is "answers `/reorder` correctly," not "trains a
 model on boot").
 
+The image installs only the `serve` dependency group in `pyproject.toml` — what
+`uvicorn reorderpoint.serve:app` imports, with no lightgbm, statsforecast or numba, no OpenMP
+runtime and no compiler (`tests/test_serve_imports.py` keeps the import graph honest). It is about
+695 MB, most of it pyarrow, scipy, pandas and the Python runtimes. Before v1.2 the Dockerfile
+installed the full dependency set, which does not build on `python:3.13-slim`: statsforecast 2.0.1
+ships no Python 3.13 wheel and needs a C++ compiler (checked on linux/arm64 and linux/amd64).
+
 ```bash
 make train                                    # writes model.joblib + safety_stock_calibration.joblib
 docker build -t reorderpoint .

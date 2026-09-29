@@ -199,8 +199,8 @@ See [`docs/data.md`](docs/data.md).
 
 ## Quickstart
 
-**macOS prerequisite:** `brew install libomp` (LightGBM's OpenMP runtime — the model ladder still
-imports it, though the served model no longer uses it).
+**macOS prerequisite:** `brew install libomp` (LightGBM's OpenMP runtime — the model ladder and
+the test suite use it; the served model and the container do not).
 
 ```bash
 make setup      # uv sync + pre-commit install
@@ -721,9 +721,10 @@ guesses.
   chosen for being the simplest model that is cost-tied, not for winning: the CI on the cost
   difference is about ±10% of cost, so this is a tie the comparison could not break, not a proof of
   equivalence; and it gives up a day-to-day shape and any response to price or event columns, which
-  this panel's cost results could not show mattering. The package still imports LightGBM and
-  statsforecast through the model ladder, so the image does not get smaller in dependencies — only
-  in what it fits and stores. Every figure is
+  this panel's cost results could not show mattering. Serving also no longer loads the model ladder:
+  the registry imports each model on first use, and `tests/test_serve_imports.py` checks that
+  importing `reorderpoint.serve` leaves lightgbm, statsforecast and numba unloaded, so the image
+  needs no OpenMP runtime. Every figure is
   conditional on the two cost parameters (holding rate: named source, not retail-specific; lost
   margin: Walmart U.S., a lower bound), the service target, and the ordering policy — see "The
   finding".
@@ -746,7 +747,15 @@ guesses.
   (`optimal_target.stockout_decomposition`, verified against the stored simulation exactly).
   `S = s + 2 × lead-time demand` raises realised CSL to 91.9% at 95% nominal and fill rate to
   97.5% — most of the gap, not all: 51% of its remaining stockouts are still undershoot, so the
-  trigger itself (not just the lot size) is still leaving service on the table. The
+  trigger itself (not just the lot size) is still leaving service on the table. **The quantile is
+  calibrated; what is left is the policy.** Held out, realised lead-time demand stayed at or under
+  the reorder point in 94.8–95.1% of windows against the 95% target
+  ([`reports/production_model_2026-09-29.md`](reports/production_model_2026-09-29.md) §4), so the
+  buffer does what it says. The 91.9% is what the ordering rule then delivers: about half of the
+  8.1% of cycles that stock out are ones the reorder point would have covered had stock been at it
+  when the order was triggered. The two figures count different things (fixed-origin windows against
+  replenishment cycles in the simulation), so they should be read as consistent in size, not as one
+  subtracted from the other. The
   fill-rate-vs-CSL formula mismatch discussed below (a fixed-Q formula against a variable-Q policy)
   is now a smaller share of the story than it looked before the decomposition existed.
 - **`y` is a demand proxy, not demand.** Units sold under-counts true demand whenever a SKU was
