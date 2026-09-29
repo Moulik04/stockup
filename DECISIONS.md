@@ -2106,3 +2106,73 @@ scrubbed-draft route in item 4 is dropped. Commit SHAs from before the rewrite t
 the text (here, in `reorderpoint/holding_sensitivity.py` and in its generated report) are replaced
 by a note that the commit was removed. Old commits still resolve by SHA on GitHub until it collects
 them, as the 2026-09-11 caveat says.
+
+## 2026-09-29 — v1.2: displayed intervals derived from the calibration; served model switched to a trailing mean; lead-time check
+
+**Context:** three items carried over from the v1.1 close-out. `/forecast` and the dashboard showed
+LightGBM's own P10/P90 while the reorder point was sized from calibrated pooled residuals, so the
+band and the decision disagreed about uncertainty; the 2026-09-29 entry above showed the native
+quantiles feed no part of the decision and every other model is cost-tied with LightGBM; and the
+divergence analysis had only compared models day by day, though the decision consumes a lead-time
+total.
+
+**1. Displayed intervals.** The band is now `P50 ± z(0.9) · σ / √lead_time_days`, where σ is the
+pooled residual std of the series' bucket — the same σ the reorder point's buffer is `z(0.95) · σ`
+of (`SafetyStockCalibration.calibrated_interval`; the identity is asserted in
+`tests/test_calibrated_interval.py` and holds on the live API). Evaluated out of sample over all four
+folds with the calibration held to fold 1's window (`reports/production_model_2026-09-29.md` §4):
+the reorder point covered realised lead-time demand in 94.8% (LightGBM) and 95.1% (MovingAverage) of
+6,400 windows against a 95% target; the 80% band covered 87% of lead-time totals and 91% of days.
+It over-covers, which is the safe direction — the lower edge is clipped at zero and demand is 77%
+zeros, and the independent-days assumption behind `σ / √L` may add width too; the table cannot
+separate the two. Not done, and not measured: an empirical daily-residual band would hit nominal
+daily coverage by construction, but it is a second calibration that could disagree with the buffer,
+which is the problem this fixes. Only the `normal` scheme has a per-day form; `empirical` raises.
+
+**2. Served model: the trailing 28-day mean.** Chosen as the simplest model that is cost-tied, not
+because it won. Against LightGBM under the shipped policy (paired bootstrap, series resampled):
+MovingAverage +$11 per fold [−$34, +$51]; the Croston family +$14 to +$26, all tied. MovingAverage
+over Croston because it has no smoothing parameters and no unsourced reference values (TSB carries
+two); it is also the ladder's existing baseline, so the evidence transfers rather than being redone.
+`TrailingMeanModel` forecasts the same numbers as the ladder's `WindowAverage(28)` (same rows on all
+four folds' training windows, largest P50 difference 4e-7 — statsforecast's float32). Fit + predict
+on the 400-series fold: 0.1 s against LightGBM's 23 s and the ladder's MovingAverage 3 s; the full
+5,650-series panel takes about 2 s. The artifact is about 1 MB against 110 MB, and there is no
+feature pipeline and no forward-exog proxy in the served path.
+- *What it gives up:* a day-to-day shape (the forecast is flat) and any response to price, promotion
+  or event columns. This panel's cost results could not show either mattering, which is a
+  statement about this panel (Track A, HOBBIES, 400 sampled series, four folds), not about demand
+  in general.
+- *A tie is not equivalence.* The CI on the cost difference is about ±$43 on ~$430 per fold, roughly
+  ±10% of cost. The comparison could not separate the models; it cannot rule out a difference of
+  that size in either direction.
+- *What it does not buy:* fewer packages. `decision.py` imports `backtest.py`, which registers the
+  whole model ladder, so serving still imports lightgbm, statsforecast and numba, and the image
+  still needs `libgomp1`. Splitting that import is the follow-up that would make the dependency
+  claim true; not done here.
+- *Refit:* `make train` fitted the model and the calibration (`model: MovingAverage`, 5,650 series,
+  calibrated through 2016-04-24). The old `lightgbm.joblib` (110 MB, gitignored) is still on disk;
+  nothing reads it.
+
+**3. Two guards added because the switch needed them.** (a) A series the calibration never saw (a
+SKU launched inside its held-out window) used to fall back to the model's own P10/P90 spread. The
+served model has none (`p10 = p90 = p50`), so that fallback would have given such a series a zero
+buffer; it now takes the pooled all-series buffer (`safety_stock(..., series_ids=...)`), tested with
+a zero-spread model. (b) `get_calibration` now returns 409 when the calibration was fitted for a
+different model than the one served: the residuals are one model's, and an old LightGBM calibration
+would otherwise have sized the new model without any sign of it.
+
+**4. Lead-time check: the hoped-for result did not appear.** The claim to test was that the models
+differ in daily shape but agree on lead-time totals. Summing each model's P50 over 7-day windows
+(6,400 windows, `reports/model_divergence_2026-09-29.md`): SeasonalNaive's daily disagreement with
+the other four (91–96% of mean demand) falls to 22–38%, because its weekly cycle cancels over a
+window as long as its season. The four clustered models do not converge: pooled correlation goes
+from 0.93–0.98 to 0.97–0.99, but inside a series it is 0.46–0.80 (against the 0.95 line), and they
+still differ from one another by 15–25% of mean lead-time demand (19–28% daily). Most of their
+disagreement was level, not shape, so summing removes little of it. The README does not claim
+agreement on lead-time totals, and the report now says so itself.
+
+**A slip caught before commit:** two figures in the first draft of the docs were wrong against the
+generated report — the artifact size ("a few kilobytes"; it is about 1 MB) and the reorder point's
+coverage ("95–96%"; LightGBM is 94.8%). Both were fixed by reading the draft against the table, not
+the memory of it, which is the same lesson as the two README overclaims above.
