@@ -66,3 +66,53 @@ def test_binary_files_are_skipped(repo):
     (repo / hook.DENYLIST_NAME).write_text("canary-zq9\n")
     _stage(repo, "blob.bin", b"\x00\x01canary-zq9\x02")
     assert hook.check(repo) == []
+
+
+WHOLE_WORD = r"re:(?<![\w-])gizmos(?![\w-])"
+
+
+def test_regex_entry_matches_case_insensitively_by_line_and_entry(repo):
+    (repo / hook.DENYLIST_NAME).write_text(f"# header\n{WHOLE_WORD}\n")
+    _stage(repo, "notes.md", "clean\nBlue GIZMOS, and gizmos.\n(gizmos)\n")
+    assert hook.check(repo) == [
+        "notes.md:2: matches denylist entry #2",
+        "notes.md:3: matches denylist entry #2",
+    ]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "gizmo",
+        "gizmo chart",
+        "gizmo-in and gizmo-out",
+        "gizmosite",
+        "gizmos-out",
+        "pre-gizmos",
+        "gizmo_s",
+    ],
+)
+def test_whole_word_pattern_has_no_false_positives(repo, text):
+    (repo / hook.DENYLIST_NAME).write_text(WHOLE_WORD + "\n")
+    _stage(repo, "notes.md", text)
+    assert hook.check(repo) == []
+
+
+def test_regex_entry_also_checks_file_names(repo):
+    (repo / hook.DENYLIST_NAME).write_text(WHOLE_WORD + "\n")
+    _stage(repo, "blue gizmos.txt", "clean")
+    assert hook.check(repo) == ["blue gizmos.txt: file name matches denylist entry #1"]
+
+
+def test_plain_entries_stay_literal_not_regex(repo):
+    (repo / hook.DENYLIST_NAME).write_text("a.c\n")
+    _stage(repo, "notes.md", "abc\nA.C\n")
+    assert hook.check(repo) == ["notes.md:2: matches denylist entry #1"]
+
+
+def test_invalid_regex_fails_loudly_without_echoing_the_pattern(repo):
+    (repo / hook.DENYLIST_NAME).write_text("ok\nre:canary-zq9(\n")
+    with pytest.raises(ValueError) as excinfo:
+        hook.load_denylist(repo / hook.DENYLIST_NAME)
+    assert "line 2" in str(excinfo.value)
+    assert "canary" not in str(excinfo.value)

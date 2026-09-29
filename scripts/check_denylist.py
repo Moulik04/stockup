@@ -1,9 +1,11 @@
 """Pre-commit hook: fail if any staged file contains a string from the local denylist.
 
 The denylist is `.denylist.local` at the repo root — gitignored, because it holds the very strings
-it protects. One string per line, matched case-insensitively as a substring; blank lines and lines
-starting with `#` are skipped. If the file is absent or empty this is a no-op, so a fresh clone (or
-CI) is never blocked by a list it cannot have.
+it protects. One entry per line, matched case-insensitively; blank lines and lines starting with
+`#` are skipped. An entry is a plain substring, unless it starts with `re:`, in which case the rest
+of the line is a regular expression (also case-insensitive) — for terms that are only a problem as
+a whole word. If the file is absent or empty this is a no-op, so a fresh clone (or CI) is never
+blocked by a list it cannot have.
 
 It reads the *staged* blob (`git show :path`), not the working tree, so it checks what the commit
 will actually contain. File paths are checked too. A hit is reported by file, line and the entry's
@@ -13,30 +15,40 @@ a log without re-leaking it.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 DENYLIST_NAME = ".denylist.local"
+REGEX_PREFIX = "re:"
 
 
-def load_denylist(path: Path) -> list[tuple[int, str]]:
-    """(line number, lowercased entry) for each usable line; empty if the file does not exist."""
+def load_denylist(path: Path) -> list[tuple[int, re.Pattern[str]]]:
+    """(line number, compiled pattern) for each usable line; empty if the file does not exist.
+
+    A bad `re:` pattern raises ValueError naming only its line number, never the pattern.
+    """
     if not path.is_file():
         return []
     entries = []
     for number, line in enumerate(path.read_text().splitlines(), start=1):
         entry = line.strip()
-        if entry and not entry.startswith("#"):
-            entries.append((number, entry.lower()))
+        if not entry or entry.startswith("#"):
+            continue
+        source = entry[len(REGEX_PREFIX) :] if entry.startswith(REGEX_PREFIX) else re.escape(entry)
+        try:
+            entries.append((number, re.compile(source, re.IGNORECASE)))
+        except re.error:
+            raise ValueError(f"{DENYLIST_NAME} line {number}: invalid regular expression") from None
     return entries
 
 
-def find_hits(text: str, entries: list[tuple[int, str]]) -> list[tuple[int, int]]:
+def find_hits(text: str, entries: list[tuple[int, re.Pattern[str]]]) -> list[tuple[int, int]]:
     """(line in `text`, denylist line number) for every match."""
     hits = []
-    for line_number, line in enumerate(text.lower().splitlines(), start=1):
-        hits += [(line_number, entry_no) for entry_no, entry in entries if entry in line]
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        hits += [(line_number, entry_no) for entry_no, pattern in entries if pattern.search(line)]
     return hits
 
 

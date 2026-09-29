@@ -3,4 +3,8 @@
 # file names. `scripts/check_denylist.py` (a pre-commit hook) fails the commit on any match and never
 # echoes the matched string. With no `.denylist.local` the hook does nothing.
 #
+# A line starting with `re:` is a regular expression instead (still case-insensitive), for terms
+# that are only a problem as a whole word. This one skips "gizmosite", "gizmos-out" and "pre-gizmos":
+#
 # example-string
+# re:(?<![\w-])gizmos(?![\w-])
