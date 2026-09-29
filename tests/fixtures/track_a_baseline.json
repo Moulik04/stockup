@@ -1,0 +1,258 @@
+{
+ "constants": {
+  "horizon": 28,
+  "n_folds": 4,
+  "n_series_sample": 400,
+  "panel_rows": 765200,
+  "panel_series": 400,
+  "season_length": 7
+ },
+ "costs": {
+  "gross_margin": 0.275,
+  "holding_cost_rate": 0.0006849315068493151,
+  "lead_time": 7,
+  "lot_multiple": 2.0,
+  "service_level_target": 0.95
+ },
+ "divergence_headline": {
+  "all_pairs_close": 0.000625,
+  "any_pair_close": 0.67125,
+  "max_pooled_pearson": 0.9789771415085001,
+  "min_pooled_pearson": 0.6552910185859631,
+  "n_pairs": 10.0,
+  "n_pairs_over_095": 5.0,
+  "n_series_folds": 1600.0
+ },
+ "folds": [
+  [
+   1,
+   "2016-01-03",
+   "2016-01-04",
+   "2016-01-31"
+  ],
+  [
+   2,
+   "2016-01-31",
+   "2016-02-01",
+   "2016-02-28"
+  ],
+  [
+   3,
+   "2016-02-28",
+   "2016-02-29",
+   "2016-03-27"
+  ],
+  [
+   4,
+   "2016-03-27",
+   "2016-03-28",
+   "2016-04-24"
+  ]
+ ],
+ "interval_evaluation": [
+  {
+   "calibrated_daily_coverage": 0.9104017857,
+   "calibrated_daily_width": 2.3358848871,
+   "lt_above": 0.07703125,
+   "lt_below": 0.05328125,
+   "lt_coverage": 0.8696875,
+   "model": "LightGBM",
+   "n_windows": 6400,
+   "native_daily_coverage": 0.8120758929,
+   "native_daily_width": 1.6846632323,
+   "reorder_point_covers": 0.9475
+  },
+  {
+   "calibrated_daily_coverage": 0.9140625,
+   "calibrated_daily_width": 2.3668965294,
+   "lt_above": 0.068125,
+   "lt_below": 0.06125,
+   "lt_coverage": 0.870625,
+   "model": "MovingAverage",
+   "n_windows": 6400,
+   "native_daily_coverage": 0.6223883929,
+   "native_daily_width": 1.3849055336,
+   "reorder_point_covers": 0.95078125
+  }
+ ],
+ "original_policy_lot_0": {
+  "AutoETS": {
+   "cost_per_fold": 1597.4569095851148,
+   "csl": 0.8187849184109275,
+   "cycles_per_fold": 923.5,
+   "fill_rate": 0.807281788733503,
+   "holding_per_fold": 176.3726325610554,
+   "orders_per_fold": 1238.75,
+   "stockout_per_fold": 1421.0842770240595
+  },
+  "AutoTheta": {
+   "cost_per_fold": 1560.5023865728203,
+   "csl": 0.8247357190284192,
+   "cycles_per_fold": 923.5,
+   "fill_rate": 0.8117995786306287,
+   "holding_per_fold": 183.61949305175114,
+   "orders_per_fold": 1238.75,
+   "stockout_per_fold": 1376.8828935210693
+  },
+  "CrostonClassic": {
+   "cost_per_fold": 1552.778111761812,
+   "csl": 0.8306342795218239,
+   "cycles_per_fold": 923.75,
+   "fill_rate": 0.8152140824586924,
+   "holding_per_fold": 184.94067368232908,
+   "orders_per_fold": 1239.0,
+   "stockout_per_fold": 1367.837438079483
+  },
+  "CrostonSBA": {
+   "cost_per_fold": 1657.8517056265987,
+   "csl": 0.8202986017552074,
+   "cycles_per_fold": 923.5,
+   "fill_rate": 0.8026464878732488,
+   "holding_per_fold": 180.24036632595417,
+   "orders_per_fold": 1238.75,
+   "stockout_per_fold": 1477.6113393006447
+  },
+  "LightGBM": {
+   "cost_per_fold": 1640.2788835173328,
+   "csl": 0.8258462093975882,
+   "cycles_per_fold": 923.5,
+   "fill_rate": 0.8148663990523748,
+   "holding_per_fold": 179.3992166745433,
+   "orders_per_fold": 1239.25,
+   "stockout_per_fold": 1460.8796668427894
+  },
+  "MovingAverage": {
+   "cost_per_fold": 1583.9923440959992,
+   "csl": 0.8225080558728127,
+   "cycles_per_fold": 923.5,
+   "fill_rate": 0.8071818592220489,
+   "holding_per_fold": 181.01487093845563,
+   "orders_per_fold": 1238.75,
+   "stockout_per_fold": 1402.9774731575435
+  },
+  "SeasonalNaive": {
+   "cost_per_fold": 1462.0442210839037,
+   "csl": 0.8471449612742195,
+   "cycles_per_fold": 923.5,
+   "fill_rate": 0.8318058527066554,
+   "holding_per_fold": 213.08567736375406,
+   "orders_per_fold": 1238.75,
+   "stockout_per_fold": 1248.9585437201497
+  },
+  "TSB": {
+   "cost_per_fold": 1557.3203942258506,
+   "csl": 0.8271777638689415,
+   "cycles_per_fold": 923.5,
+   "fill_rate": 0.8146395474953086,
+   "holding_per_fold": 183.10473904332758,
+   "orders_per_fold": 1238.75,
+   "stockout_per_fold": 1374.2156551825228
+  }
+ },
+ "refit_max_abs_diff": {
+  "CrostonClassic": {
+   "p10": 0.0,
+   "p50": 0.0,
+   "p90": 0.0
+  },
+  "CrostonSBA": {
+   "p10": 0.0,
+   "p50": 0.0,
+   "p90": 0.0
+  },
+  "LightGBM": {
+   "p10": 0.0,
+   "p50": 0.0,
+   "p90": 0.0
+  },
+  "MovingAverage": {
+   "p10": 0.0,
+   "p50": 0.0,
+   "p90": 0.0
+  },
+  "SeasonalNaive": {
+   "p10": 0.0,
+   "p50": 0.0,
+   "p90": 0.0
+  },
+  "TSB": {
+   "p10": 0.0,
+   "p50": 0.0,
+   "p90": 0.0
+  }
+ },
+ "shipped_cell_lot_2": {
+  "AutoETS": {
+   "cost_per_fold": 425.00504670371595,
+   "csl": 0.9236024454806693,
+   "cycles_per_fold": 506.25,
+   "fill_rate": 0.9767684242994337,
+   "holding_per_fold": 321.89818113987144,
+   "orders_per_fold": 671.5,
+   "stockout_per_fold": 103.10686556384448
+  },
+  "AutoTheta": {
+   "cost_per_fold": 448.97996712350226,
+   "csl": 0.9227453449965746,
+   "cycles_per_fold": 519.0,
+   "fill_rate": 0.9755638607751437,
+   "holding_per_fold": 328.60539512646744,
+   "orders_per_fold": 694.0,
+   "stockout_per_fold": 120.37457199703485
+  },
+  "CrostonClassic": {
+   "cost_per_fold": 441.9488325030261,
+   "csl": 0.9258015547095997,
+   "cycles_per_fold": 494.5,
+   "fill_rate": 0.9775985276867524,
+   "holding_per_fold": 335.8871098152468,
+   "orders_per_fold": 653.0,
+   "stockout_per_fold": 106.06172268777928
+  },
+  "CrostonSBA": {
+   "cost_per_fold": 440.8380713372074,
+   "csl": 0.9250174500371585,
+   "cycles_per_fold": 512.75,
+   "fill_rate": 0.9744846959687706,
+   "holding_per_fold": 323.4955574682951,
+   "orders_per_fold": 681.5,
+   "stockout_per_fold": 117.3425138689123
+  },
+  "LightGBM": {
+   "cost_per_fold": 426.6452593837507,
+   "csl": 0.9344856404156333,
+   "cycles_per_fold": 489.75,
+   "fill_rate": 0.9819728263737871,
+   "holding_per_fold": 323.5695405431805,
+   "orders_per_fold": 647.25,
+   "stockout_per_fold": 103.07571884057026
+  },
+  "MovingAverage": {
+   "cost_per_fold": 437.70851196636727,
+   "csl": 0.91702282242463,
+   "cycles_per_fold": 496.5,
+   "fill_rate": 0.9758007246124196,
+   "holding_per_fold": 324.6674478974533,
+   "orders_per_fold": 661.75,
+   "stockout_per_fold": 113.0410640689139
+  },
+  "SeasonalNaive": {
+   "cost_per_fold": 525.5003605885461,
+   "csl": 0.895112269439784,
+   "cycles_per_fold": 519.0,
+   "fill_rate": 0.9666475594423322,
+   "holding_per_fold": 352.03419408346696,
+   "orders_per_fold": 693.5,
+   "stockout_per_fold": 173.46616650507912
+  },
+  "TSB": {
+   "cost_per_fold": 452.45378764191685,
+   "csl": 0.9249644928225116,
+   "cycles_per_fold": 510.75,
+   "fill_rate": 0.9765417078671025,
+   "holding_per_fold": 329.1561288597855,
+   "orders_per_fold": 678.75,
+   "stockout_per_fold": 123.29765878213135
+  }
+ }
+}
