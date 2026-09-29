@@ -23,6 +23,19 @@ dependencies = [
 ]
 
 [dependency-groups]
+# Exactly what `uvicorn reorderpoint.serve:app` imports — no lightgbm, statsforecast or numba
+# (`tests/test_serve_imports.py`). The Dockerfile installs only this group, so the image does not
+# build, or carry, the model ladder.
+serve = [
+    "pandas>=2.2",
+    "numpy",
+    "scipy",
+    "pyarrow>=17.0",
+    "python-dotenv>=1.0",
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.52.4",
+    "joblib>=1.6.0",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",

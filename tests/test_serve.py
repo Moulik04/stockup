@@ -196,3 +196,17 @@ def test_a_matching_or_unnamed_model_passes_the_calibration_check(monkeypatch):
     assert serve.get_calibration().model_name == "LightGBM"
     monkeypatch.setattr(serve, "_load_model", lambda: _DummyModel())  # no `name`: not checked
     assert serve.get_calibration().model_name == "LightGBM"
+
+
+def test_forecast_band_never_goes_below_zero(client):
+    # a P50 of 0.1 with a daily half-width of ~1.7 would put a symmetric lower edge near -1.6
+    class _Low(_DummyModel):
+        def predict_quantiles(self, horizon, future_exog=None):
+            out = super().predict_quantiles(horizon, future_exog)
+            out["p50"] = 0.1
+            return out
+
+    serve.app.dependency_overrides[serve.get_model] = lambda: _Low()
+    body = client.post("/forecast", json={"series_ids": ["A", "B"], "horizon": 7}).json()
+    assert body and all(row["p10"] == 0.0 for row in body)
+    assert all(row["p90"] > row["p50"] for row in body)

@@ -8,11 +8,13 @@ one series at a time in a Python loop) is what makes this tractable at thousands
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
 import pandas as pd
-from statsforecast import StatsForecast
+
+if TYPE_CHECKING:
+    from statsforecast import StatsForecast
 
 
 class QuantileForecaster(Protocol):
@@ -54,6 +56,10 @@ class StatsForecastQuantileModel:
         self._train = train.rename(columns={"series_id": "unique_id", "date": "ds"})[
             ["unique_id", "ds", "y"]
         ]
+        # imported here, not at module level: this file also defines the `QuantileForecaster`
+        # protocol that serving imports, and serving must not load statsforecast
+        from statsforecast import StatsForecast
+
         self._sf = StatsForecast(models=[self._model], freq="D", n_jobs=self._n_jobs)
 
     def predict_quantiles(

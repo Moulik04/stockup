@@ -9,6 +9,7 @@ model-specific branches.
 from __future__ import annotations
 
 import datetime as dt
+import importlib
 from dataclasses import dataclass
 
 import numpy as np
@@ -16,7 +17,6 @@ import pandas as pd
 
 from reorderpoint.config import REPO_ROOT
 from reorderpoint.metrics import coverage, pinball_loss, weighted_average
-from reorderpoint.models import croston, lightgbm_global, naive, statistical
 
 PANEL_PATH = REPO_ROOT / "data" / "track_a" / "processed" / "panel.parquet"
 REPORTS_DIR = REPO_ROOT / "reports"
@@ -33,21 +33,36 @@ SEASON_LENGTH = 7
 N_SERIES_SAMPLE = 400
 SAMPLE_SEED = 0
 
+
+def _lazy(module: str, attr: str):
+    """A registry factory that imports its model module on first call.
+
+    Importing this file must not load lightgbm or statsforecast: `decision.py` imports it for its
+    fold helpers, `serve.py` imports `decision.py`, and the served model needs neither library.
+    `tests/test_serve_imports.py` pins that."""
+
+    def factory(horizon: int):
+        return getattr(importlib.import_module(module), attr)(horizon)
+
+    factory.__name__ = factory.__qualname__ = attr
+    return factory
+
+
 MODEL_FACTORIES = {
-    "SeasonalNaive": naive.seasonal_naive,
-    "MovingAverage": naive.moving_average,
-    "AutoETS": statistical.auto_ets,
-    "AutoTheta": statistical.auto_theta,
-    "LightGBM": lightgbm_global.lightgbm_global,
+    "SeasonalNaive": _lazy("reorderpoint.models.naive", "seasonal_naive"),
+    "MovingAverage": _lazy("reorderpoint.models.naive", "moving_average"),
+    "AutoETS": _lazy("reorderpoint.models.statistical", "auto_ets"),
+    "AutoTheta": _lazy("reorderpoint.models.statistical", "auto_theta"),
+    "LightGBM": _lazy("reorderpoint.models.lightgbm_global", "lightgbm_global"),
     # v1.1 Task 4: the models built for intermittent demand, added after the fact — the ladder's
     # most obvious gap on a 77%-zero panel. See reorderpoint/models/croston.py and
     # reports/croston_*.md. Every downstream script that loops over MODEL_FACTORIES (divergence,
     # ablate_safety_stock, decision, order_up_to) picks these up automatically; scripts that
     # hardcode their own model list (optimal_target.MODELS, holding_sensitivity.MODELS) do not,
     # by design — they reproduce dated reports written before this family existed.
-    "CrostonClassic": croston.croston_classic,
-    "CrostonSBA": croston.croston_sba,
-    "TSB": croston.tsb,
+    "CrostonClassic": _lazy("reorderpoint.models.croston", "croston_classic"),
+    "CrostonSBA": _lazy("reorderpoint.models.croston", "croston_sba"),
+    "TSB": _lazy("reorderpoint.models.croston", "tsb"),
 }
 
 
