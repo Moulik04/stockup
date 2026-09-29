@@ -2276,9 +2276,9 @@ wrong. Run locally against a built container before committing: all four checks 
 - *Side effect, measured:* the real image (real panel, model and calibration) is 615.9 MB against
   695.1 MB for the v1.2.0 image, 79 MB smaller — the second Python; it answers `/reorder` with the
   same numbers as before.
-- *Not checked:* the CI job itself has not run on GitHub yet at the time of writing; the same steps
-  were run locally on linux/arm64 (Docker Desktop). The runner is linux/amd64, where every locked
-  wheel in the `serve` group exists, but that is read from the lockfile, not run.
+- *First GitHub run:* the `image` job passed on the push of `4a0b0dd` (run 36641665339, linux/amd64
+  runner), as did `test`. Before that the same steps had only been run locally on linux/arm64 (Docker
+  Desktop); the amd64 wheels for the `serve` group had been read from the lockfile, not run.
 
 **3. The LightGBM segfault, recorded.** Minimal reproduction, no project code:
 
