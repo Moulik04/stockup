@@ -101,14 +101,22 @@ The image does **not** bundle the raw M5 CSVs or retrain on start — `make trai
 the host (or in your own build stage) first, producing `models/production/model.joblib`, which
 the `Dockerfile` copies in alongside the processed `panel.parquet`. This keeps the image small and
 the container's startup fast (the acceptance bar is "answers `/reorder` correctly," not "trains a
-model on boot").
+model on boot"). That bar was not shown to be met until v1.2.1: see below.
 
 The image installs only the `serve` dependency group in `pyproject.toml` — what
 `uvicorn reorderpoint.serve:app` imports, with no lightgbm, statsforecast or numba, no OpenMP
 runtime and no compiler (`tests/test_serve_imports.py` keeps the import graph honest). It is about
-695 MB, most of it pyarrow, scipy, pandas and the Python runtimes. Before v1.2 the Dockerfile
-installed the full dependency set, which does not build on `python:3.13-slim`: statsforecast 2.0.1
-ships no Python 3.13 wheel and needs a C++ compiler (checked on linux/arm64 and linux/amd64).
+about 616 MB, most of it pyarrow, scipy, pandas and the Python runtime. **No earlier version of
+the Dockerfile built.** The first (Python 3.12) failed installing the project itself, because
+`pyproject.toml` names `README.md` as the readme and the image did not copy it; after the 3.13 bump
+it installed the full dependency set, which fails on `python:3.13-slim` (statsforecast 2.0.1 has no
+Python 3.13 wheel and needs a C++ compiler). Since v1.2.1 CI builds the image from a fixture, runs
+the container and checks `/health`, `/reorder`, `/forecast` and `/metrics` against numbers derived
+by hand (`scripts/docker_smoke.py`), so this cannot go unnoticed again.
+
+The base image's Python minor is a build argument, `PYTHON_VERSION`, defaulting to the one in
+`.python-version` (the file local development and CI use); the image uses that Python rather than
+downloading its own, and `tests/test_python_pin.py` fails if the three drift apart.
 
 ```bash
 make train                                    # writes model.joblib + safety_stock_calibration.joblib

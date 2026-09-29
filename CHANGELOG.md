@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.2.1 — 2026-09-29
+
+The serving image is now built and queried in CI, and what had been claimed about it is corrected.
+
+### Added
+
+- **CI builds the image and asks the running container real questions.** A fixture panel, model and
+  calibration are built, the image is built and run, and `/health`, `/reorder`, `/forecast` and
+  `/metrics` are compared to numbers derived by hand (`scripts/docker_smoke.py`; the expectations are
+  themselves tested without Docker in `tests/test_docker_smoke.py`).
+- The base image's Python minor comes from `.python-version` (a `PYTHON_VERSION` build argument), the
+  image uses that Python instead of downloading its own, and a test fails if the Dockerfile, the pin
+  and CI drift apart. 79 MB smaller as a side effect (616 MB, measured).
+- A subprocess test that the supported import order (lightgbm before hierarchicalforecast) fits
+  LightGBM without crashing; the crash and a minimal reproduction are in `DECISIONS.md`.
+
+### Headline claims revised
+
+- **"Docker image" (Phase 6), and its acceptance bar "docker container answers `/reorder`
+  correctly"** — never shown to be met. No Dockerfile in this repository's history builds: the
+  first failed installing the project (`README.md` not copied), the one after the Python 3.13 bump
+  failed building statsforecast (no cp313 wheel, no compiler in the slim image). v1.2.0 fixed the
+  build; v1.2.1 is the first version where CI checks it. The `v1.0.0` tag message and `v1.0.1`
+  release notes still say "Docker" without qualification.
+- **"All direct dependencies ship cp313 wheels" (the 2026-09-11 Python bump)** — false for
+  statsforecast 2.0.1, which has wheels for cp39–cp312 only.
+
 ## v1.2.0 — 2026-09-29
 
 The served system now shows the uncertainty it acts on, runs a much simpler model, and no longer

@@ -166,7 +166,9 @@ policy it can defend. That is the case for Track B (real costs), and for the das
 > sizes the reorder point**, not read off a model. MinTrace reconciliation's item-level gain
 > (Phase 5, run on AutoETS, not the production model) does not survive a bootstrap; a FastAPI
 > service, batch scoring, Docker image, CI,
-> monitoring, and a Streamlit dashboard sit on top of it (Phase 6) — see "Results" and
+> monitoring, and a Streamlit dashboard sit on top of it (Phase 6) — **except that the Docker image,
+> though present since Phase 6, did not build in any version of this repository until v1.2.0 and was
+> first checked in CI in v1.2.1** (see the CHANGELOG); see "Results" and
 > [`docs/serving.md`](docs/serving.md).
 
 <p align="center">
@@ -592,9 +594,11 @@ so it says nothing about LightGBM either way.
 `reorderpoint/train.py` persists the production model (LightGBM through v1.1, a trailing 28-day
 mean since v1.2); `serve.py` exposes it as a FastAPI
 app (`/health`, `/forecast`, `/reorder`, `/metrics`) and a `make score` batch job sharing the same
-decision logic; a Dockerfile packages it (image doesn't train on boot — see docs/serving.md);
+decision logic; a Dockerfile packages it (image doesn't train on boot — see docs/serving.md; it
+did not build until v1.2.0, and CI has built it and queried the running container since v1.2.1);
 `.github/workflows/ci.yml` runs lint + the full test suite (including a real, not mocked,
-end-to-end smoke backtest) on every push; `monitor.py` provides rolling-MASE error-spike detection
+end-to-end smoke backtest) on every push, plus a job that builds the image and checks the running
+container's `/health`, `/reorder`, `/forecast` and `/metrics` against hand-derived numbers; `monitor.py` provides rolling-MASE error-spike detection
 and input-drift detection (verified against a synthetically drifted series in
 `tests/test_monitor.py`); and a Streamlit dashboard (`make dashboard`) gives an operator a
 per-series view: history, forecast fan, reorder recommendation, latest backtest/decision report

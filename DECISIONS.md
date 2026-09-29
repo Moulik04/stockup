@@ -463,6 +463,14 @@ rerun after `make data`/`make data-full` — there's no automatic invalidation. 
 portfolio-project demo service; a real deployment would tie training to a data-freshness check or
 a schedule, which is out of scope here.
 
+**Correction (added 2026-09-29): the acceptance check this entry mentions was never shown to pass.**
+Phase 6's acceptance bar is "docker container answers `/reorder` correctly". No record in this
+repository says it was met, and no Dockerfile in its history builds: the earliest (2026-09-09,
+`python:3.12-slim`) fails at the project-install step because `pyproject.toml` names `README.md` as
+the readme and the Dockerfile never copies it; the one after the 3.13 bump fails on a missing C++
+compiler. See the 2026-09-29 v1.2.1 entry. The design described here (copy in a pre-trained model,
+do not train on boot) stands; that it was ever run does not.
+
 ## 2026-09-07 — Phase 6: forward-exog by repeating the trailing window, not real future data
 
 **Context:** `LightGBMGlobalModel.predict_quantiles` needs `future_exog` — calendar/price/event
@@ -1004,6 +1012,15 @@ and `black --check` both clean with no changes needed.
 **Consequence:** dev environment and Docker serving image now match on Python 3.13. `uv.lock`
 regenerated accordingly.
 
+**Correction (added 2026-09-29): the wheel claim above was false for statsforecast, and the image
+was not built.** "All now ship `cp313` wheels" does not hold for `statsforecast==2.0.1`, the version
+this repository locks: PyPI lists wheels for cp39 through cp312 only. On a machine with a compiler
+(the development Mac, CI's `ubuntu-latest`) `uv` builds it from source, which is why the test
+suite never noticed; `python:3.13-slim` has no compiler, so the image stopped building at this
+commit. The **Verification** above covers the virtualenv and the test suite, not the image, and "the
+Docker serving image now match[es] on Python 3.13" described a base-image tag, not a working image.
+See the 2026-09-29 v1.2.1 entry.
+
 ## 2026-09-15 — v1.1 Task 1: the models are not interchangeable, but they cluster for a reason
 
 **Context:** RMSSE sits at 0.814–0.823 for AutoTheta, MovingAverage, AutoETS and LightGBM — a
@@ -1535,7 +1552,8 @@ harness (`BASELINE_CELL`) and `train.py` read. Regression tests: harness (`run_c
 same reorder point for the same series and forecast; the endpoint sizes from the calibration, not the
 interval; 503/409 paths; `fit_calibration` reproduces the harness procedure. On the real model and full panel
 the raw buffer averaged 3.07 units vs 6.16 calibrated (2.0x; larger for 92.7% of series, median 2.9x).
-Dockerfile now copies the artifact (it would have 503'd). **Not verified:** realised service of the running
+Dockerfile now copies the artifact (it would have 503'd; the image itself had never been built —
+see the 2026-09-29 v1.2.1 entry). **Not verified:** realised service of the running
 system — there is no outcome feed, only sizing equality with the harness.
 
 **(2) Critical ratio.** Cu/(Cu+Co), Co = 25%/yr x unit cost x period. Under the new lost-margin economics:
@@ -2205,3 +2223,84 @@ the memory of it, which is the same lesson as the two README overclaims above.
   not within a few percent, and the README makes no claim that similar errors are the mechanism behind
   the cost tie. The buffers they imply differ by about the same 5–15%, which sits inside the ±10% cost
   interval, so this is consistent with the tie without explaining it.
+
+## 2026-09-29 — v1.2.1: the image is built and run in CI; what was claimed about it; the LightGBM segfault
+
+**Context:** the v1.2 work found that the Dockerfile did not build, and that nothing in CI would have
+said so. Two follow-ups: build and query the image in CI, and audit what had been claimed about it;
+and record a crash the v1.2 refactor exposed.
+
+**1. Audit: was the container ever built, run or verified?** Checked every README, DECISIONS,
+CHANGELOG and docs statement about it, then built the two Dockerfiles the repository contains
+(dependencies as locked, dummy model files, since the failure is upstream of them):
+- *2026-09-09, the earliest, `python:3.12-slim`:* the dependency layer installs (every locked wheel
+  exists for cp312); the project-install step then fails — `OSError: Readme file does not exist:
+  README.md`, because `pyproject.toml` declares `readme = "README.md"` and the Dockerfile copies
+  only `reorderpoint/` and the lockfile.
+- *2026-09-11, after the 3.13 bump:* fails earlier, building `statsforecast==2.0.1` from source with
+  `No such file or directory: 'c++'`. PyPI confirms that release has no cp313 wheel (cp39–cp312).
+- *So no Dockerfile in this repository's history builds*, and no record says one was built or run.
+  History was rewritten (filter-repo) and starts on 2026-09-09, so a Phase 6 file that differed cannot
+  be tested; what can be said is that none of the recorded ones could have passed "answers `/reorder`
+  correctly".
+- *Claims corrected, in place, with the file's usual "Correction (added ...)" notes:* the Phase 6
+  entry (the acceptance check it mentions was never shown to pass); the 2026-09-11 Python 3.13 entry
+  (the wheel-tag claim was false for statsforecast, and its Verification never covered the image);
+  the calibration entry's "Dockerfile now copies the artifact". The README status block and Serving
+  paragraph, `docs/serving.md` and the CHANGELOG say the same.
+- *Not edited:* the `v1.0.0` tag message and the `v1.0.1` GitHub release body both describe the
+  serving layer as coming "with monitoring, Docker, and CI". A tag message cannot change without
+  moving the tag, and editing a published release is a public action outside this task; the text is
+  flagged here for a decision.
+- *A dependency of the same shape:* the 2026-09-11 entry says it "checked actual PyPI wheel tags (not
+  assumptions)". The check was real for the packages it looked at and wrong for one of them; what to
+  take from it is that a wheel-tag check has to be run against the locked versions, not the package
+  names — which the CI job below now does implicitly, by building.
+
+**2. The CI job.** `.github/workflows/ci.yml` gains an `image` job: install only the `serve`
+dependency group, build a context from `scripts/docker_smoke.py prepare` (a 70-day, two-series
+fixture; the model and calibration `make train` would write for it; the real `data/` and `models/`
+are never touched), `docker build`, `docker run`, then `scripts/docker_smoke.py check` asks the
+container `/health`, `/reorder`, `/forecast` and `/metrics` and compares the answers to numbers
+derived by hand in that script's docstring, not by calling the code under test (reorder point
+14 + z(0.95)·√2 = 16.326; safety stock 2.326; forecast band 2 ± z(0.90)·√2/√7 = ±0.685). The
+fixture and the comparison are verified without Docker in `tests/test_docker_smoke.py`, which runs the
+same fixture through the real serving code and requires the comparison to fail when an answer is
+wrong. Run locally against a built container before committing: all four checks pass.
+- *One Python minor everywhere.* The Dockerfile takes `ARG PYTHON_VERSION` (default 3.13) for the base
+  image, CI builds with `--build-arg PYTHON_VERSION=$(cat .python-version)`, and the image sets
+  `UV_PYTHON_PREFERENCE=only-system UV_PYTHON_DOWNLOADS=never`, so the base image's Python is the one
+  wheels are chosen for. Before, `pyproject.toml`'s `python-preference = "only-managed"` made uv
+  download its own Python whatever the base image was, so the base tag pinned nothing.
+  `tests/test_python_pin.py` fails if the default, `.python-version` or the CI build argument drift.
+- *Side effect, measured:* the real image (real panel, model and calibration) is 615.9 MB against
+  695.1 MB for the v1.2.0 image, 79 MB smaller — the second Python; it answers `/reorder` with the
+  same numbers as before.
+- *Not checked:* the CI job itself has not run on GitHub yet at the time of writing; the same steps
+  were run locally on linux/arm64 (Docker Desktop). The runner is linux/amd64, where every locked
+  wheel in the `serve` group exists, but that is read from the lockfile, not run.
+
+**3. The LightGBM segfault, recorded.** Minimal reproduction, no project code:
+
+    python -c "import hierarchicalforecast.core; import numpy as np, lightgbm as lgb; \
+               lgb.LGBMRegressor(n_estimators=20).fit(np.random.rand(500, 5), np.random.rand(500))"
+
+exits **139** (SIGSEGV) on 3 of 3 runs; with `import lightgbm` first it exits 0 on 3 of 3. The crash
+is inside `lightgbm/basic.py`'s `__init_from_np2d` (Dataset construction). Also crashes after
+`hierarchicalforecast.utils` and `.methods`; does not crash after importing sklearn, statsforecast,
+numba or `scipy.sparse.linalg` — it is specific to hierarchicalforecast. Environment: lightgbm 4.7.0,
+scikit-learn 1.9.0, macOS 26.6.2 arm64, Python 3.13.15. **The mechanism is not known.** v1.2's
+first guess (two OpenMP runtimes, with sklearn's bundled libomp the obvious suspect) is retracted
+as far as sklearn goes; the crash being an OpenMP clash at all is unverified. Not investigated
+further, by decision: it needs `reconcile.py` and a LightGBM fit in one process, and nothing in the
+package does that.
+- *How it surfaced:* the lazy model registry (v1.2) stopped `import reorderpoint.backtest` from
+  importing lightgbm as a side effect, so the import order in the pytest process came to depend on
+  test-file collection order (`test_ci_reports` imports `reconcile` before `test_lightgbm_global` is
+  collected). Not seen on Linux; not tested there beyond the supported order below.
+- *What is and is not tested:* `tests/conftest.py` imports lightgbm first, which fixes the suite and
+  therefore hides the crash from it. `tests/test_openmp_order.py` runs the **supported** order in a
+  fresh interpreter (lightgbm, then `hierarchicalforecast.core` or `reorderpoint.reconcile`, then a
+  fit) and asserts it exits 0, so the order stays known to work and CI checks it on Linux. It
+  deliberately does not run the crashing order: asserting a segfault would test one platform's
+  behaviour, not anything this project controls.
