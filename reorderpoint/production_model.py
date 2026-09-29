@@ -208,6 +208,11 @@ def interval_evaluation(
         calibrated = (banded["y"] >= banded["cal_p10"]) & (banded["y"] <= banded["cal_p90"])
 
         banded["block"] = banded.groupby(["fold", "series_id"]).cumcount() // lead
+        # a trailing block shorter than the lead time (a 13-week fold cut into 2-week windows leaves
+        # one week) is not a lead-time total and is not scored as one; on Track A's 28 days in 7-day
+        # windows there is never such a block
+        size = banded.groupby(["fold", "series_id", "block"])["p50"].transform("size")
+        banded = banded[size == lead]
         totals = banded.groupby(["fold", "series_id", "block"]).agg(
             p50=("p50", "sum"), y=("y", "sum")
         )

@@ -30,6 +30,8 @@ def _panel_path() -> Path:
     calibration residuals, decision detail) cannot collide."""
     if GRAIN.name == "day":
         return REPO_ROOT / "data" / "track_a" / "processed" / "panel.parquet"
+    if os.environ.get("TRACK_B_PANEL_DIR"):  # tests and smoke runs: a scratch panel, own caches
+        return Path(os.environ["TRACK_B_PANEL_DIR"]) / "panel.parquet"
     name = os.environ.get("TRACK_B_PANEL", "primary")
     if name not in TRACK_B_PANELS:
         raise ValueError(f"TRACK_B_PANEL must be one of {TRACK_B_PANELS}, got {name!r}")
