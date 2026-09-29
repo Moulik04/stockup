@@ -579,3 +579,20 @@ def test_order_quantity_stats_with_no_orders_is_nan_not_zero():
     stats = dec._order_quantity_stats(detail)
     assert np.isnan(stats["q_mean"])
     assert np.isnan(stats["q_cv"])
+
+
+def test_calibrated_decision_does_not_read_the_forecast_quantiles():
+    # With a calibrated buffer, only P50 (lead-time mean) and the buffer set the reorder point and
+    # the order-up-to level; P10/P90 reach nothing but the quantile-derived fallback.
+    narrow = _forecast("A", p10=[9, 9, 9], p50=[10, 10, 10], p90=[11, 11, 11])
+    wide = _forecast("A", p10=[0, 0, 0], p50=[10, 10, 10], p90=[1_000, 1_000, 1_000])
+    on_hand = pd.Series({"A": 5.0})
+    buffer = pd.Series({"A": 7.0})
+
+    a = dec.compute_decisions(narrow, on_hand, 3, 0.95, safety_stock=buffer, lot_multiple=2.0)
+    b = dec.compute_decisions(wide, on_hand, 3, 0.95, safety_stock=buffer, lot_multiple=2.0)
+
+    for col in ("mean", "safety_stock", "reorder_point", "order_up_to", "order_quantity"):
+        assert a.loc["A", col] == b.loc["A", col]
+    assert a.loc["A", "reorder_point"] == pytest.approx(30.0 + 7.0)
+    assert a.loc["A", "order_up_to"] == pytest.approx(37.0 + 2.0 * 30.0)

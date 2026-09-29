@@ -1,4 +1,4 @@
-.PHONY: setup data data-full data-reconcile eda backtest divergence decide safety-stock service-level holding-sensitivity breakeven optimal-target penalty holdout croston reconcile train calibrate score serve dashboard test lint format
+.PHONY: setup data data-full data-reconcile eda backtest divergence decide safety-stock service-level holding-sensitivity breakeven optimal-target penalty holdout croston production-model reconcile train calibrate score serve dashboard test lint format
 
 setup:
 	uv sync
@@ -74,6 +74,13 @@ holdout:
 # caches with just these three models; the five already there are not re-fit.
 croston:
 	uv run python -m reorderpoint.croston
+
+# Is LightGBM still the right model to serve? Runs the shipped policy with every model's P10/P90
+# scrambled (do the native quantiles feed sizing?), paired-bootstrap cost of each cluster member
+# and the Croston family against LightGBM, and fit time / interval coverage
+# (reports/production_model_*.md). Reuses the caches `make croston` extends.
+production-model:
+	uv run python -m reorderpoint.production_model
 
 reconcile:
 	uv run python -m reorderpoint.reconcile

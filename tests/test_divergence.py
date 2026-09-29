@@ -106,3 +106,27 @@ def test_wide_p50_joins_actuals_and_drops_incomplete_rows():
     wide = dv.wide_p50(pd.DataFrame(rows))
     assert len(wide) == 1
     assert list(wide.iloc[0][["A", "B", "y"]]) == [1.0, 2.0, 3.0]
+
+
+def test_per_series_correlation_is_not_carried_by_the_series_with_big_swings():
+    # Series 0 swings by 100 and the two models agree; series 1 swings by 1 and they disagree.
+    # The pooled-demeaned column is dominated by series 0; the per-series mean must not be.
+    a = [0.0, 100.0, 0.0, 100.0, 1.0, 2.0, 1.0, 2.0]
+    b = [0.0, 100.0, 0.0, 100.0, 2.0, 1.0, 2.0, 1.0]
+    wide = _wide({"A": a, "B": b}, y=[1.0] * 8, n_series=2)
+
+    corr = dv.pairwise_correlations(wide, ["A", "B"]).iloc[0]
+    assert corr["pearson_within_series"] > 0.99
+    assert corr["mean_series_pearson"] == pytest.approx(0.0)
+    assert corr["frac_series_defined"] == 1.0
+
+
+def test_per_series_correlation_averages_only_where_both_forecasts_move():
+    # series 0: A moves, B is flat (undefined); series 1: both move and agree
+    a = [1.0, 2.0, 3.0, 1.0, 2.0, 3.0]
+    b = [5.0, 5.0, 5.0, 2.0, 4.0, 6.0]
+    wide = _wide({"A": a, "B": b}, y=[1.0] * 6, n_series=2)
+
+    corr = dv.pairwise_correlations(wide, ["A", "B"]).iloc[0]
+    assert corr["frac_series_defined"] == 0.5
+    assert corr["mean_series_pearson"] == pytest.approx(1.0)

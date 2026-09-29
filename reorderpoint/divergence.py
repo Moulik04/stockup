@@ -22,6 +22,11 @@ from reorderpoint import backtest as bt
 FORECASTS_PATH = bt.PANEL_PATH.parent / "backtest_forecasts.parquet"
 CLOSE_THRESHOLD = 0.05
 CORRELATED_THRESHOLD = 0.95
+# The five models the published divergence report compares. The registry has since grown (the
+# Croston family, all flat by construction), which would make every pair involving them a
+# structural "undefined" and change what the verdict text below is entitled to say.
+REPORT_MODELS = ("SeasonalNaive", "MovingAverage", "AutoETS", "AutoTheta", "LightGBM")
+FLAT_TOLERANCE = 1e-12
 
 
 def collect_forecasts(panel: pd.DataFrame) -> pd.DataFrame:
@@ -74,8 +79,24 @@ def wide_p50(forecasts: pd.DataFrame) -> pd.DataFrame:
     return wide.join(extra, how="left")
 
 
+def per_series_correlation(wide: pd.DataFrame, a: str, b: str) -> pd.Series:
+    """Pearson correlation of `a`'s and `b`'s P50 across the horizon, one value per (fold, series).
+
+    NaN where either forecast is flat over the horizon: the correlation has no shape to compare,
+    and 0 would misreport "no agreement" for what is really "nothing to measure".
+    """
+    keys = ["fold", "series_id"]
+    da = wide[a] - wide.groupby(level=keys)[a].transform("mean")
+    db = wide[b] - wide.groupby(level=keys)[b].transform("mean")
+    var_a = (da**2).groupby(level=keys).sum()
+    var_b = (db**2).groupby(level=keys).sum()
+    cov = (da * db).groupby(level=keys).sum()
+    defined = (var_a > FLAT_TOLERANCE) & (var_b > FLAT_TOLERANCE)
+    return (cov / np.sqrt(var_a * var_b)).where(defined)
+
+
 def pairwise_correlations(wide: pd.DataFrame, models: list[str]) -> pd.DataFrame:
-    """Pearson/Spearman per model pair, three ways:
+    """Pearson/Spearman per model pair, four ways:
 
     - pooled: raw P50 vectors. Dominated by *between-series* level differences — any two models
       that agree which series sell more will correlate highly even if their day-to-day forecasts
@@ -84,6 +105,10 @@ def pairwise_correlations(wide: pd.DataFrame, models: list[str]) -> pd.DataFrame
       horizon counts. Undefined for flat forecasts (MovingAverage is flat by construction), so
       those pairs are reported as NaN rather than a misleading 0.
     - series_level: the 28-day mean forecast per (fold, series) — do models agree on volume.
+    - mean_series_pearson: the correlation computed *inside* each (fold, series) across the
+      horizon, then averaged over the (fold, series) where both forecasts move at all
+      (`frac_series_defined` says how many that is). Unlike `within_series` it cannot be carried
+      by the few high-volume series whose day-to-day swings are large in absolute units.
     """
     keys = ["fold", "series_id"]
     level = wide.groupby(level=keys)[models].mean()
@@ -103,6 +128,9 @@ def pairwise_correlations(wide: pd.DataFrame, models: list[str]) -> pd.DataFrame
             row["pearson_within_series"] = demeaned.loc[has_shape, a].corr(
                 demeaned.loc[has_shape, b]
             )
+        per_series = per_series_correlation(wide, a, b)
+        row["mean_series_pearson"] = per_series.mean() if per_series.notna().any() else np.nan
+        row["frac_series_defined"] = float(per_series.notna().mean())
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -234,6 +262,7 @@ def _verdict(corr: pd.DataFrame, mad: pd.DataFrame, close_summary: dict[str, flo
     over = merged[merged["pearson_pooled"] > CORRELATED_THRESHOLD]
     under = merged[merged["pearson_pooled"] <= CORRELATED_THRESHOLD]
     near_identical = n_over == len(merged)
+    measurable = over[over["frac_series_defined"] > 0]
 
     lines = [
         "## What this measures, and what it found",
@@ -252,10 +281,20 @@ def _verdict(corr: pd.DataFrame, mad: pd.DataFrame, close_summary: dict[str, flo
     else:
         pairs_over = ", ".join(f"{r.model_a}/{r.model_b}" for r in over.itertuples())
         worst = under.sort_values("pearson_pooled").iloc[0]
+        involves_seasonal = (merged["model_a"] == "SeasonalNaive") | (
+            merged["model_b"] == "SeasonalNaive"
+        )
+        cluster, seasonal = merged[~involves_seasonal], merged[involves_seasonal]
+        below_cluster = cluster[cluster["pearson_pooled"] <= CORRELATED_THRESHOLD]
+        cluster_below = "".join(
+            f", but not every cluster pair clears it: "
+            f"{r.model_a}/{r.model_b} is {r.pearson_pooled:.3f}"
+            for r in below_cluster.itertuples()
+        )
         lines += [
             f"The models are **not** collectively interchangeable. The pairs above the line "
-            f"({pairs_over}) are exactly the models that cluster on RMSSE; the pairs below it all "
-            f"involve SeasonalNaive, which is genuinely a different forecast "
+            f"({pairs_over}) all sit inside the four-model RMSSE cluster{cluster_below}; the "
+            f"pairs below it that involve SeasonalNaive are genuinely a different forecast "
             f"(lowest: {worst.model_a}/{worst.model_b} at {worst.pearson_pooled:.3f}).",
             "",
             "Three qualifications keep this from being a clean all-clear:",
@@ -264,10 +303,16 @@ def _verdict(corr: pd.DataFrame, mad: pd.DataFrame, close_summary: dict[str, flo
             f"any two models that agree which SKUs sell more will correlate well. Demeaning "
             f"within each series×fold drops these same above-the-line pairs to "
             f"{over['pearson_within_series'].min():.2f}–"
-            f"{over['pearson_within_series'].max():.2f} where it is defined at all — and it is "
-            f"undefined for MovingAverage, whose forecast is flat across the horizon by "
-            f"construction, so two of the five vanish entirely. Most of the agreement is about "
-            f"series *level*, not shape.",
+            f"{over['pearson_within_series'].max():.2f} where it is defined at all, and "
+            f"correlating inside each series×fold and averaging (so no series' scale can carry "
+            f"it) gives {over['mean_series_pearson'].min():.2f}–"
+            f"{over['mean_series_pearson'].max():.2f} — measurable on only "
+            f"{measurable['frac_series_defined'].min():.0%}–"
+            f"{measurable['frac_series_defined'].max():.0%} of series×folds for the pairs where it "
+            f"is measurable at all, and not at all for any pair with MovingAverage, whose forecast "
+            f"is flat across the horizon by construction. The pooled "
+            f"{over['pearson_pooled'].min():.2f}–{over['pearson_pooled'].max():.2f} is agreement "
+            f"about series *level*, not shape.",
             f"2. **The disagreements are small next to the errors.** Across the correlated pairs, "
             f"mean |P50_a − P50_b| runs "
             f"{over['frac_of_pair_mae'].min():.0%}–{over['frac_of_pair_mae'].max():.0%} of those "
@@ -283,9 +328,13 @@ def _verdict(corr: pd.DataFrame, mad: pd.DataFrame, close_summary: dict[str, flo
             "",
             "**Conclusion: the comparisons stand, with a caveat.** The ranking separates real "
             "differences in forecast, so the accuracy and cost tables are not pure noise. But the "
-            "four clustered models make forecasts far more similar to each other than to their "
-            "own errors, so small reported gaps between them should not be read as rankings until "
-            "they survive a significance test.",
+            "four clustered models agree on level far more than on shape, and differ from each "
+            f"other by {cluster['frac_of_mean_demand'].min():.0%}–"
+            f"{cluster['frac_of_mean_demand'].max():.0%} of mean demand (against "
+            f"{seasonal['frac_of_mean_demand'].max():.0%} at the widest pair involving "
+            "SeasonalNaive): that is a real difference, just a smaller one. "
+            '"Near-interchangeable" overstates it. Small reported gaps between them should '
+            "not be read as rankings until they survive a significance test.",
             "",
         ]
     return lines
@@ -297,7 +346,7 @@ def _fmt_table(df: pd.DataFrame) -> str:
 
 
 def build_report(forecasts: pd.DataFrame, plot_rel_path: str | None) -> tuple[str, dict]:
-    models = list(bt.MODEL_FACTORIES)
+    models = [m for m in bt.MODEL_FACTORIES if m in REPORT_MODELS]
     wide = wide_p50(forecasts)
     wide["bucket"] = bucket_of(wide["zero_rate"]).to_numpy()
 
@@ -331,6 +380,8 @@ def build_report(forecasts: pd.DataFrame, plot_rel_path: str | None) -> tuple[st
                         "spearman_pooled",
                         "pearson_series_level",
                         "pearson_within_series",
+                        "mean_series_pearson",
+                        "frac_series_defined",
                         "frac_of_mean_demand",
                         "frac_of_pair_mae",
                     ]
@@ -371,8 +422,11 @@ def build_report(forecasts: pd.DataFrame, plot_rel_path: str | None) -> tuple[st
         "Correlation columns: `pooled` = raw P50 vectors (dominated by between-series volume "
         "differences); `series_level` = 28-day mean per series×fold; `within_series` = "
         "demeaned per series×fold, i.e. agreement on day-to-day shape (blank where a model's "
-        "forecast is flat by construction). `frac_of_mean_demand` = mean |P50_a − P50_b| ÷ mean "
-        "demand; `frac_of_pair_mae` = the same difference ÷ the two models' mean absolute error.",
+        "forecast is flat by construction); `mean_series_pearson` = the correlation taken "
+        "inside each series×fold and then averaged, over the `frac_series_defined` share of "
+        "series×folds where both forecasts move. `frac_of_mean_demand` = mean |P50_a − P50_b| ÷ "
+        "mean demand; `frac_of_pair_mae` = the same difference ÷ the two models' mean absolute "
+        "error.",
         "",
         _fmt_table(
             corr_pooled.merge(mad, on=["model_a", "model_b"])[
@@ -384,6 +438,8 @@ def build_report(forecasts: pd.DataFrame, plot_rel_path: str | None) -> tuple[st
                     "pearson_series_level",
                     "spearman_series_level",
                     "pearson_within_series",
+                    "mean_series_pearson",
+                    "frac_series_defined",
                     "frac_of_mean_demand",
                     "frac_of_pair_mae",
                 ]
