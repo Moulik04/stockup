@@ -1,5 +1,10 @@
 """v1.1 close-out — what the production model is for, and whether it is still the right one.
 
+(Updated for v1.2: the served model is now `TrailingMeanModel`, the ladder's MovingAverage rung —
+sections 4 and 5 below measure the calibrated interval `/forecast` now shows and confirm the served
+implementation forecasts what the ladder's MovingAverage did. Sections 1-3 are the evidence for the
+switch and are unchanged.)
+
 The README justified serving LightGBM "for its calibrated intervals". Since the decision layer was
 repaired, sizing runs on pooled empirical residuals (`safety_stock.py`, `calibration.py`) and the
 order-up-to level on the P50 lead-time mean, so the question is whether the model's own P10/P90
@@ -14,6 +19,11 @@ reach the reorder decision at all. This module answers three things, at exactly 
    intermittency bucket, plus SeasonalNaive as the reference that is genuinely different.
 3. **What does each model cost to run?** Fit + predict time on the backtest's 400-series last
    fold, the persisted artifact, and whether it needs the feature/exog pipeline.
+4. **Does the displayed interval match the decision?** The calibrated band `/forecast` shows
+   (`SafetyStockCalibration.calibrated_interval`) against the model's own P10/P90, on held-out days
+   and on held-out lead-time totals, plus how often the reorder point itself covers demand.
+5. **Is the served model the evaluated one?** `TrailingMeanModel` against the ladder's
+   MovingAverage, forecast for forecast.
 
 Reuses the forecast and calibration caches (`make divergence`, `make croston`), so it costs
 simulations and one timing pass, not a backtest.
@@ -24,15 +34,22 @@ from __future__ import annotations
 import datetime as dt
 import time
 
+import numpy as np
 import pandas as pd
+from scipy.stats import norm
 
 from reorderpoint import backtest as bt
 from reorderpoint import bootstrap as boot
 from reorderpoint import croston as cr
 from reorderpoint import divergence as dv
+from reorderpoint import safety_stock as ss
+from reorderpoint.calibration import INTERVAL_LEVEL, SafetyStockCalibration
 from reorderpoint.config import CostParams, daily_to_annual, load_config
+from reorderpoint.models.trailing_mean import TrailingMeanModel
 
-PRODUCTION = "LightGBM"
+PRODUCTION = "LightGBM"  # the model this report's comparisons are made against
+SERVED = "TrailingMean (served)"  # what `train.py` now fits: the ladder's MovingAverage, no deps
+INTERVAL_MODELS = ("LightGBM", "MovingAverage")
 CLUSTER = ("MovingAverage", "AutoETS", "AutoTheta")
 CANDIDATES = (*CLUSTER, *cr.NEW_MODELS)
 REFERENCE = "SeasonalNaive"
@@ -128,9 +145,10 @@ def time_models(eval_panel: pd.DataFrame, models: list[str]) -> pd.DataFrame:
         (eval_panel["date"] >= fold.test_start) & (eval_panel["date"] <= fold.test_end)
     ]
     horizon = (fold.test_end - fold.test_start).days + 1
+    factories = {**bt.MODEL_FACTORIES, SERVED: lambda _horizon: TrailingMeanModel()}
     rows = []
     for name in models:
-        model = bt.MODEL_FACTORIES[name](horizon)
+        model = factories[name](horizon)
         t0 = time.perf_counter()
         model.fit(train)
         model.predict_quantiles(horizon, future_exog=test.drop(columns=["y"]))
@@ -148,6 +166,98 @@ def interval_coverage(forecasts: pd.DataFrame, models: list[str]) -> pd.Series:
     return ((f["y"] >= f["p10"]) & (f["y"] <= f["p90"])).groupby(f["model"]).mean()
 
 
+# ---- 4. does the displayed interval match the decision? ----------------------------------------
+
+
+def _cached_calibration(
+    cache: pd.DataFrame, model: str, costs: CostParams
+) -> SafetyStockCalibration:
+    """The production calibration object, built from the harness's fold-1 residual cache, so the
+    numbers below come from the code path `/forecast` and `/reorder` actually run."""
+    c = cache[cache["model"] == model].set_index("series_id")[["residual", "zero_rate", "volume"]]
+    return SafetyStockCalibration(
+        form=ss.LEGACY_SCHEME[0],
+        granularity=ss.LEGACY_SCHEME[1],
+        lead_time_days=costs.lead_time_days,
+        model_name=model,
+        calibrated_through=pd.NaT,
+        residuals=c,
+    )
+
+
+def interval_evaluation(
+    forecasts: pd.DataFrame, cache: pd.DataFrame, costs: CostParams, models: tuple[str, ...]
+) -> pd.DataFrame:
+    """Per model, out of sample over all four folds (the calibration is fold 1's residual window):
+    daily coverage and mean width of the model's own P10/P90 vs the calibrated band; coverage of
+    the calibrated `INTERVAL_LEVEL` interval on lead-time totals (split into misses below and
+    above); and the share of lead-time windows whose realised demand the reorder point covers
+    (nominally the service-level target)."""
+    lead = costs.lead_time_days
+    z = norm.ppf((1 + INTERVAL_LEVEL) / 2)
+    rows = []
+    for model in models:
+        cal = _cached_calibration(cache, model, costs)
+        f = forecasts[forecasts["model"] == model].sort_values(["fold", "series_id", "date"])
+        banded = pd.concat(
+            [cal.calibrated_interval(g) for _, g in f.groupby("fold")], ignore_index=True
+        ).rename(columns={"p10": "cal_p10", "p90": "cal_p90"})
+        banded = banded.assign(p10=f["p10"].to_numpy(), p90=f["p90"].to_numpy())
+        native = (banded["y"] >= banded["p10"]) & (banded["y"] <= banded["p90"])
+        calibrated = (banded["y"] >= banded["cal_p10"]) & (banded["y"] <= banded["cal_p90"])
+
+        banded["block"] = banded.groupby(["fold", "series_id"]).cumcount() // lead
+        totals = banded.groupby(["fold", "series_id", "block"]).agg(
+            p50=("p50", "sum"), y=("y", "sum")
+        )
+        sigma = cal.lead_time_std(totals.index.get_level_values("series_id").unique())
+        sig = totals.index.get_level_values("series_id").map(sigma).to_numpy()
+        lo = np.clip(totals["p50"] - z * sig, 0, None)
+        hi = totals["p50"] + z * sig
+        buffer = cal.safety_stock(
+            costs.service_level_target, series_ids=totals.index.get_level_values("series_id")
+        ).to_numpy()
+        rows.append(
+            {
+                "model": model,
+                "native_daily_coverage": native.mean(),
+                "calibrated_daily_coverage": calibrated.mean(),
+                "native_daily_width": (banded["p90"] - banded["p10"]).mean(),
+                "calibrated_daily_width": (banded["cal_p90"] - banded["cal_p10"]).mean(),
+                "lt_coverage": ((totals["y"] >= lo) & (totals["y"] <= hi)).mean(),
+                "lt_below": (totals["y"] < lo).mean(),
+                "lt_above": (totals["y"] > hi).mean(),
+                "reorder_point_covers": (totals["y"] <= totals["p50"] + buffer).mean(),
+                "n_windows": len(totals),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+# ---- 5. is the served model the evaluated one? ---------------------------------------------------
+
+
+def equivalence_to_ladder(eval_panel: pd.DataFrame) -> dict:
+    """`TrailingMeanModel` vs the ladder's MovingAverage on every fold's training window: do they
+    forecast the same (series, date) rows, and how far apart are the P50s?"""
+    worst, rows_ok = 0.0, True
+    for fold in bt.make_folds(eval_panel):
+        train = eval_panel[eval_panel["date"] <= fold.train_end]
+        horizon = (fold.test_end - fold.test_start).days + 1
+        ref = bt.MODEL_FACTORIES["MovingAverage"](horizon)
+        ref.fit(train)
+        served = TrailingMeanModel()
+        served.fit(train)
+        a = ref.predict_quantiles(horizon)
+        b = served.predict_quantiles(horizon)
+        merged = a.merge(
+            b, on=["series_id", "date"], how="outer", suffixes=("_ref", "_new"), indicator=True
+        )
+        rows_ok &= bool((merged["_merge"] == "both").all())
+        worst = max(worst, float((merged["p50_ref"] - merged["p50_new"]).abs().max()))
+    return {"same_rows": rows_ok, "max_abs_p50_diff": worst, "n_folds": bt.N_FOLDS}
+
+
 # ---- report -----------------------------------------------------------------------------------
 
 
@@ -162,6 +272,8 @@ def build_report(
     coverage: pd.Series,
     costs: CostParams,
     n_series: int,
+    intervals: pd.DataFrame,
+    equivalence: dict,
 ) -> str:
     changes = audit["max_abs_change"]
     independent = all(changes[c] == 0.0 for c in DECISION_COLUMNS)
@@ -185,11 +297,18 @@ def build_report(
     timing_table = cr._md(
         timing.assign(
             fit_predict_s=timing["fit_predict_s"].map(lambda v: f"{v:.1f}"),
-            coverage_80=timing["model"].map(lambda m: f"{coverage[m]:.1%}"),
+            coverage_80=timing["model"].map(
+                lambda m: f"{coverage[m]:.1%}" if m in coverage else "n/a (no native band)"
+            ),
         )
     )
+    rp = intervals["reorder_point_covers"]
+    native = intervals["native_daily_coverage"]
+    rp_range = f"{rp.min():.1%}–{rp.max():.1%}"
+    native_range = f"{native.min():.0%}–{native.max():.0%}"
     lines = [
-        f"# Production model — what LightGBM is for, and what it costs — {dt.date.today()}",
+        f"# Production model — what LightGBM was for, what it costs, and what replaced it — "
+        f"{dt.date.today()}",
         "",
         f"Shipped policy throughout: `S = s + {costs.lot_multiple:g} x lead-time demand`, "
         f"{costs.service_level_target:.0%} target, legacy (normal, intermittency) safety-stock "
@@ -256,14 +375,81 @@ def build_report(
         "machine, all cores). The statistical models fit per series, so their time scales roughly "
         "linearly in series count; LightGBM is one global fit. `coverage_80` is the share of test "
         "days inside the model's own P10–P90 band — what `/forecast` and the dashboard fan chart "
-        "show, and the only place the models' quantiles still reach a user.",
+        "showed through v1.1, before they switched to the calibrated band of section 4.",
         "",
         timing_table,
         "",
         "Not measured here, read from the code: LightGBM needs `features.build_features` (lags, "
         "rolling stats, calendar, price, event flags) and a forward exog proxy at serve time "
         "(`exog.py`, repeat-the-recent-pattern), and persists a ~110 MB artifact; the statistical "
-        "and Croston models need only each series' own demand history and persist nothing.",
+        "and Croston models need only each series' own demand history and persist nothing. The "
+        f"`{SERVED}` row is the implementation `train.py` now fits: the same forecast as "
+        "MovingAverage with no statsforecast call. Timing note: it is measured here on the "
+        "400-series fold like every other row; on the full 5,650-series panel it takes about two "
+        "seconds.",
+        "",
+        "## 4. Does the interval `/forecast` shows match the decision?",
+        "",
+        f"`/forecast` and the dashboard's fan chart now show "
+        f"`P50 ± z({INTERVAL_LEVEL:.0%} central) × σ ÷ √{costs.lead_time_days}` per day, where "
+        f"σ is the same pooled residual std the reorder point's buffer is "
+        f"`z({costs.service_level_target:.0%}) × σ` of "
+        "(`SafetyStockCalibration.calibrated_interval`). Evaluated out of sample on all four "
+        "folds with the calibration held to fold 1's residual window, through the production "
+        "code path:",
+        "",
+        cr._md(
+            pd.DataFrame(
+                {
+                    "model": intervals["model"],
+                    "native daily coverage": intervals["native_daily_coverage"].map(
+                        "{:.1%}".format
+                    ),
+                    "calibrated daily coverage": intervals["calibrated_daily_coverage"].map(
+                        "{:.1%}".format
+                    ),
+                    "native / calibrated daily width": [
+                        f"{a:.2f} / {b:.2f}"
+                        for a, b in zip(
+                            intervals["native_daily_width"],
+                            intervals["calibrated_daily_width"],
+                            strict=True,
+                        )
+                    ],
+                    "lead-time total coverage": intervals["lt_coverage"].map("{:.1%}".format),
+                    "missed below / above": [
+                        f"{lo:.1%} / {hi:.1%}"
+                        for lo, hi in zip(intervals["lt_below"], intervals["lt_above"], strict=True)
+                    ],
+                    f"reorder point covers ({costs.service_level_target:.0%} target)": intervals[
+                        "reorder_point_covers"
+                    ].map("{:.1%}".format),
+                }
+            )
+        ),
+        "",
+        f"Nominal coverage is {INTERVAL_LEVEL:.0%}. Read it three ways. **The reorder point does "
+        f"what it says**: realised lead-time demand stayed at or under it in {rp_range} of "
+        f"{int(intervals['n_windows'].iloc[0]):,} held-out windows against a "
+        f"{costs.service_level_target:.0%} target (in-stock probability, not the volume-weighted "
+        "fill rate the cost tables report). **The band over-covers, which is the safe direction "
+        "to be wrong in**: the lower edge is clipped at zero and most demand is zero, so any "
+        "band as wide as the reorder point's spread contains nearly every zero day; the "
+        "independent-days assumption in `σ ÷ √L` may add width too, which this table cannot "
+        "separate. **The model's own quantiles do not describe the decision**: they cover "
+        f"{native_range} of days depending on the model, and LightGBM's near-nominal figure "
+        "comes from alphas tuned to hit that coverage (`DECISIONS.md`, 2026-09-03), not from "
+        "anything about the buffer stocked. The calibrated band depends on the model only through "
+        "its residual spread, so what is shown follows what is decided.",
+        "",
+        "## 5. Is the served model the evaluated one?",
+        "",
+        f"`TrailingMeanModel` against the ladder's MovingAverage on all {equivalence['n_folds']} "
+        f"folds' training windows: "
+        f"{'same (series, date) rows' if equivalence['same_rows'] else '**different rows**'}, "
+        f"largest P50 difference {equivalence['max_abs_p50_diff']:.1e} (statsforecast computes in "
+        "float32). The cost comparison in section 2 therefore applies to the served model as "
+        "it stands.",
         "",
     ]
     return "\n".join(lines)
@@ -281,9 +467,14 @@ def main() -> None:
     detail = cr.shipped_cell(panel, forecasts, calib, costs)
     ci = cost_vs_production(detail, bt._intermittency(panel))
 
-    timing = time_models(panel, [PRODUCTION, *CANDIDATES])
+    timing = time_models(panel, [PRODUCTION, *CANDIDATES, SERVED])
     coverage = interval_coverage(forecasts, [PRODUCTION, *CANDIDATES])
-    report = build_report(audit, ci, timing, coverage, costs, panel["series_id"].nunique())
+    intervals = interval_evaluation(forecasts, calib, costs, INTERVAL_MODELS)
+    equivalence = equivalence_to_ladder(panel)
+    print(intervals.round(3).to_string(), equivalence, flush=True)
+    report = build_report(
+        audit, ci, timing, coverage, costs, panel["series_id"].nunique(), intervals, equivalence
+    )
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     out = REPORTS_DIR / f"production_model_{dt.date.today().isoformat()}.md"
     out.write_text(report)

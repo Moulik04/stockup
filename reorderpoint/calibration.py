@@ -15,6 +15,13 @@ for fold 1 of the harness. The residuals are persisted, not a target-specific bu
 artifact sizes for any `service_level_target` and any (form, granularity) `safety_stock.py`
 supports; `train.py` writes it next to the model.
 
+The same artifact also draws the interval users see (`calibrated_interval`). The reorder point is
+`P50 lead-time demand + z(service level) * sigma`, with `sigma` the pooled residual std of the
+series' bucket; the displayed P10/P90 are `P50 -/+ z(0.9) * sigma / sqrt(lead_time_days)` per day,
+so a band and a reorder point that were read off the same series agree by construction on how
+uncertain a lead time's demand is. The model's own P10/P90 never reach the decision and are not
+what is shown.
+
 Limits, stated because they are real: one calibration window (one residual per series, pooled
 across ~5.6k series into two buckets), so a bucket's tail is estimated from that one window; and it
 is fitted at train time, so it goes stale exactly as the model does.
@@ -26,7 +33,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import joblib
+import numpy as np
 import pandas as pd
+from scipy.stats import norm
 
 from reorderpoint import decision as dec
 from reorderpoint import safety_stock as ss
@@ -38,6 +47,8 @@ CALIBRATION_PATH = REPO_ROOT / "models" / "production" / "safety_stock_calibrati
 # Calibration is only a per-series buffer estimate; the bootstrap CI `per_series_safety_stock`
 # also returns is for the reports, so serving keeps its resamples minimal.
 SERVE_N_BOOT = 2
+# The central interval served and charted. Its edges are the columns named p10 / p90.
+INTERVAL_LEVEL = 0.80
 
 
 @dataclass
@@ -49,8 +60,15 @@ class SafetyStockCalibration:
     calibrated_through: pd.Timestamp  # last date of the held-out residual window
     residuals: pd.DataFrame  # index series_id; columns residual, zero_rate, volume
 
-    def safety_stock(self, service_level: float, n_boot: int = SERVE_N_BOOT) -> pd.Series:
-        """Per-series safety stock (units of lead-time demand) at `service_level`."""
+    def safety_stock(
+        self, service_level: float, n_boot: int = SERVE_N_BOOT, series_ids=None
+    ) -> pd.Series:
+        """Per-series safety stock (units of lead-time demand) at `service_level`.
+
+        With `series_ids`, the result covers exactly those series: one the calibration never saw
+        (a SKU launched inside the held-out window) takes the pooled all-series buffer, the same
+        degradation `per_series_safety_stock` applies to a thin bucket. Without a model-quantile
+        fallback to lean on, this is what keeps such a series from getting no buffer at all."""
         r = self.residuals
         per_series, _ = ss.per_series_safety_stock(
             r["residual"],
@@ -61,7 +79,55 @@ class SafetyStockCalibration:
             granularity=self.granularity,
             n_boot=n_boot,
         )
-        return per_series
+        if series_ids is None:
+            return per_series
+        pooled = ss.bucket_safety_stock(
+            r["residual"],
+            pd.Series("__all__", index=r.index),
+            service_level,
+            form=self.form,
+            n_boot=n_boot,
+        )["safety_stock"].iloc[0]
+        return per_series.reindex(series_ids).fillna(pooled)
+
+    def lead_time_std(self, series_ids=None) -> pd.Series:
+        """Per-series std of lead-time-demand error: the `sigma` the `normal` form sizes safety
+        stock from (`safety_stock = z * sigma`). A series' bucket std, or the pooled all-series std
+        for one the calibration never saw or whose bucket has no usable estimate."""
+        r = self.residuals
+        buckets = ss.assign_buckets(r["zero_rate"], r["volume"], self.granularity)
+        table = ss.bucket_safety_stock(
+            r["residual"], buckets, 0.5, form="normal", n_boot=SERVE_N_BOOT
+        )
+        values = r["residual"].to_numpy(dtype=float)
+        finite = values[np.isfinite(values)]
+        pooled = float(np.std(finite, ddof=1)) if len(finite) > 1 else 0.0
+        sigma = buckets.map(table["std"]).fillna(pooled)
+        if series_ids is not None:
+            sigma = sigma.reindex(series_ids).fillna(pooled)
+        return sigma.rename("lead_time_std")
+
+    def calibrated_interval(self, preds: pd.DataFrame) -> pd.DataFrame:
+        """`preds` with p10/p90 replaced by the calibrated `INTERVAL_LEVEL` interval.
+
+        Daily half-width is `z * sigma / sqrt(lead_time_days)`, i.e. daily errors are treated as
+        independent, so the half-widths add in quadrature to exactly the `sigma` the reorder point
+        is sized from — the same assumption `decision.lead_time_demand_stats` makes in the other
+        direction. The lower edge is clipped at zero. Only defined for the `normal` form: the
+        `empirical` form's buffer is an asymmetric residual quantile with no per-day equivalent.
+        Measured coverage against the native quantiles: `reports/production_model_*.md`."""
+        if self.form != "normal":
+            raise ValueError(
+                f"calibrated_interval needs the normal safety-stock form, not {self.form!r}"
+            )
+        z = norm.ppf((1 + INTERVAL_LEVEL) / 2)
+        sigma = self.lead_time_std(preds["series_id"].unique())
+        half = z * preds["series_id"].map(sigma).to_numpy() / np.sqrt(self.lead_time_days)
+        out = preds.copy()
+        p50 = out["p50"].to_numpy(dtype=float)
+        out["p10"] = np.clip(p50 - half, 0, None)
+        out["p90"] = p50 + half
+        return out
 
     def bucket_table(self, service_level: float) -> pd.DataFrame:
         r = self.residuals

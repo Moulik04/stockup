@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased (v1.2)
+
+The served system now shows the uncertainty it acts on, and runs a much simpler model.
+
+### Changed
+
+- **Displayed intervals match the decision.** `/forecast` and the dashboard's fan chart used the
+  model's own P10/P90; the reorder point is sized from calibrated pooled residuals, so the band and
+  the decision disagreed about uncertainty. The band is now `P50 ± z(0.9) · σ / √lead_time_days`
+  from that same calibration (`SafetyStockCalibration.calibrated_interval`). `/forecast` now
+  returns 503 without the calibration, like `/reorder`.
+- **Served model: trailing 28-day mean** (`TrailingMeanModel`, the ladder's MovingAverage rung)
+  instead of LightGBM. Cost-tied with LightGBM under the shipped policy (paired bootstrap), same
+  forecast as the ladder's MovingAverage (checked row for row), no features, no forward-exog
+  proxy, about 1 MB instead of ~110 MB. The artifact moves to `models/production/model.joblib`;
+  rerun `make train` (it also refits the calibration, which must follow the model).
+- A series the calibration never saw takes the pooled buffer, not a model-quantile fallback the
+  served model cannot supply.
+
+### Added
+
+- Divergence report: the model comparison repeated on lead-time totals. It does not support "the
+  models agree on lead-time totals" for the clustered models; SeasonalNaive's daily shape does wash
+  out over a lead time as long as its season.
+- Production-model report: coverage of the calibrated interval against the native one, how often
+  the reorder point covers demand, and the served model's equivalence to the ladder's.
+- The denylist hook accepts `re:` entries for whole-word patterns.
+
 ## v1.1.0 — 2026-09-29
 
 The decision layer was rebuilt and every headline claim was re-tested under it. The main result

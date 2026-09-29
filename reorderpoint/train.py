@@ -1,5 +1,6 @@
-"""Trains the production LightGBM model on the full ingested panel and persists it via joblib —
-serve.py loads this instead of retraining on every request/container start.
+"""Fits the production model (`TrailingMeanModel`, the ladder's MovingAverage rung) on the full
+ingested panel and persists it via joblib — serve.py loads this instead of refitting on every
+request/container start. Also fits the safety-stock calibration served with it (`calibration.py`).
 """
 
 from __future__ import annotations
@@ -13,19 +14,17 @@ from reorderpoint import calibration as cal
 from reorderpoint import safety_stock as ss
 from reorderpoint.config import REPO_ROOT, load_config
 from reorderpoint.models.base import QuantileForecaster
-from reorderpoint.models.lightgbm_global import lightgbm_global
+from reorderpoint.models.trailing_mean import TrailingMeanModel
 
 PANEL_PATH = REPO_ROOT / "data" / "track_a" / "processed" / "panel.parquet"
-MODEL_PATH = REPO_ROOT / "models" / "production" / "lightgbm.joblib"
-TRAIN_HORIZON = 28
+MODEL_PATH = REPO_ROOT / "models" / "production" / "model.joblib"
 
 
-def train_production_model(panel: pd.DataFrame, horizon: int = TRAIN_HORIZON) -> QuantileForecaster:
-    """Fits one LightGBM global model on the entire panel — no held-out fold, since this is the
-    model that actually ships (Phase 3's backtest already established it beats the baselines;
-    this just trains it on all available history rather than a train/test split).
-    """
-    model = lightgbm_global(horizon)
+def train_production_model(panel: pd.DataFrame) -> QuantileForecaster:
+    """Fits the served model on the entire panel — no held-out fold, since this is the model that
+    actually ships. Its cost against the LightGBM it replaced is measured in
+    `reports/production_model_*.md`; there is nothing to train beyond a per-series mean."""
+    model = TrailingMeanModel()
     model.fit(panel)
     return model
 
@@ -35,13 +34,15 @@ def train_production_calibration(
 ) -> cal.SafetyStockCalibration:
     """The safety-stock calibration served alongside the model — see `calibration.py`. Fits a
     second copy of the model on the panel minus its last lead-time window; the served model is
-    still the one trained on everything."""
+    still the one trained on everything. Must be refitted whenever the served model changes: the
+    residuals are that model's."""
     return cal.fit_calibration(
         panel,
-        lambda: lightgbm_global(TRAIN_HORIZON),
+        TrailingMeanModel,
         lead_time_days,
         form=ss.DEFAULT_SCHEME[0],
         granularity=ss.DEFAULT_SCHEME[1],
+        model_name=TrailingMeanModel.name,
     )
 
 

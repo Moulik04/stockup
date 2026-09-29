@@ -4,18 +4,30 @@ Phase 6: turns the pipeline into a running service, not just a report generator.
 
 ## Production model
 
-`make train` (`reorderpoint/train.py`) fits one LightGBM global model on the **entire** ingested
-panel (no held-out fold — this trains the model the backtests evaluated on all available
-history; under the shipped policy it beats SeasonalNaive and is cost-tied with the other
-statistical models, see `reports/production_model_*.md`) and persists it via `joblib` to
-`models/production/lightgbm.joblib` (gitignored, like all model artifacts). `serve.py` loads this
-once at first request (`functools.lru_cache`) rather than retraining per request or per container
-start — retraining LightGBM on every request would make the API too slow to be useful.
+`make train` (`reorderpoint/train.py`) fits `TrailingMeanModel` on the **entire** ingested panel
+(no held-out fold): each series' mean demand over its last 28 days, held flat. It is the ladder's
+MovingAverage rung without the statsforecast call — same forecast, checked row for row against the
+ladder's implementation in `reports/production_model_*.md` §5 — and it replaced LightGBM in v1.2
+because, under the shipped policy, it costs the same to within the noise of the comparison (paired
+bootstrap, §2 of that report), needs only each series' own history, and persists about 1 MB
+instead of ~110 MB. It is persisted via `joblib` to `models/production/model.joblib` (gitignored,
+like all model artifacts). `serve.py` loads it once at first request (`functools.lru_cache`)
+rather than refitting per request or per container start.
+
+What the switch gives up: a day-to-day shape (the forecast is flat) and any response to price,
+promotion or event columns. The decision consumes a lead-time total, and the evidence says that
+total costs the same to get either way on this panel (Track A, HOBBIES, 400 sampled series, four
+folds — a tie means the comparison could not separate them, not that they are equal; the 95%
+interval on the cost difference is about ±10% of cost). LightGBM stays in the backtest ladder for
+exactly this comparison; `models/lightgbm_global.py` is untouched.
 
 ## Endpoints
 
 - `GET /health` — liveness check.
 - `POST /forecast` — `{"series_ids": [...], "horizon": 28}` → P10/P50/P90 for each series/day.
+  P50 is the model's; **P10/P90 come from the safety-stock calibration below, not from the model**
+  (the served model has no intervals of its own), so the band and the reorder point are read off the
+  same calibrated forecast errors. Like `/reorder`, it returns 503 without the calibration.
 - `POST /reorder` — `{"series_ids": [...], "on_hand": {"series_id": qty, ...}}` → reorder point,
   safety stock, order quantity, stockout probability, and a rationale per series (the policy in
   `docs/decision.md`, sized with the **calibrated** safety stock below). Any
@@ -49,14 +61,29 @@ and forecast).
   and size. On the real model the calibrated buffer averages 2.0× the raw one (6.2 vs 3.1 units;
   higher for 93% of series).
 
+**The interval `/forecast` and the dashboard show** is derived from the same residuals
+(`SafetyStockCalibration.calibrated_interval`): `P50 ± z(0.9) · σ / √lead_time_days` per day, with
+`σ` the pooled residual std of the series' bucket — the very `σ` the reorder point's buffer is
+`z(service level) · σ` of, so daily half-widths add in quadrature to the lead-time uncertainty the
+buffer covers. The lower edge is clipped at zero; daily errors are treated as independent (the
+same assumption `decision.lead_time_demand_stats` makes in the other direction); it needs the
+`normal` form, which is the default scheme. Held out, the reorder point covered realised
+lead-time demand in 94.8–95.1% of windows against a 95% target, and the 80% band covered 87% of
+lead-time totals and about 91% of days — wider than nominal, the safe side, because demand is
+mostly zeros and the lower edge is clipped (`reports/production_model_*.md` §4). A series the
+calibration never saw (a SKU launched inside its held-out window) takes the pooled all-series
+`σ` and buffer rather than a model-quantile fallback, which the served model could not supply.
+
 `make score` (`serve.py --batch`) runs the same `/reorder` logic over **every** series in the
 panel and writes `outputs/reorder_<date>.csv` — a batch-job path that shares all its logic with
 the API path rather than duplicating it.
 
 ## The forward-exog simplification
 
-Both `/forecast` and `/reorder` need `future_exog` — the calendar/price/event columns
-`LightGBMGlobalModel` expects to know in advance (see `models/lightgbm_global.py`). A real
+Both `/forecast` and `/reorder` pass `future_exog` — the calendar/price/event columns a model like
+`LightGBMGlobalModel` expects to know in advance (see `models/lightgbm_global.py`). The served
+`TrailingMeanModel` ignores it, so since v1.2 the proxy below only matters if a feature-driven
+model is served again (and for the calibration's held-out window, which uses the same path). A real
 deployment would source genuine forward-looking values (an actual pricing/promo calendar). This
 project doesn't have one, so `future_exog_from_trailing_window` **repeats each series' most
 recent `horizon`-day row pattern**, with dates advanced forward — except the columns that are
@@ -71,13 +98,13 @@ deployment barely notices, since Track B's schema doesn't carry those columns at
 ## Docker
 
 The image does **not** bundle the raw M5 CSVs or retrain on start — `make train` must be run on
-the host (or in your own build stage) first, producing `models/production/lightgbm.joblib`, which
+the host (or in your own build stage) first, producing `models/production/model.joblib`, which
 the `Dockerfile` copies in alongside the processed `panel.parquet`. This keeps the image small and
 the container's startup fast (the acceptance bar is "answers `/reorder` correctly," not "trains a
 model on boot").
 
 ```bash
-make train                                    # writes lightgbm.joblib + safety_stock_calibration.joblib
+make train                                    # writes model.joblib + safety_stock_calibration.joblib
 docker build -t reorderpoint .
 docker run -p 8000:8000 reorderpoint
 curl -X POST localhost:8000/reorder -H 'content-type: application/json' \
@@ -100,8 +127,8 @@ is exercised directly by its tests rather than wired into a cron/Actions schedul
 
 ## Dashboard
 
-`make dashboard` (`reorderpoint/dashboard.py`, Streamlit) — pick a series, see its history, P10/
-P50/P90 forecast fan, current reorder recommendation, and the latest backtest/decision report
-headlines. Talks to the same `reorderpoint` modules directly (no HTTP calls to the FastAPI
+`make dashboard` (`reorderpoint/dashboard.py`, Streamlit) — pick a series, see its history, the
+forecast with its calibrated 80% band (same source as `/forecast`), current reorder
+recommendation, and the latest backtest/decision report headlines. Talks to the same `reorderpoint` modules directly (no HTTP calls to the FastAPI
 service) — it's a read-only operator view over the same production model and panel, not a client
 of the API.

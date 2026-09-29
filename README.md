@@ -158,8 +158,12 @@ policy it can defend. That is the case for Track B (real costs), and for the das
 > now sizes safety stock with the same calibrated method the results were measured with, and orders
 > up to `s + 2 × lead-time demand` instead of just `s`** (`/reorder`, `make score` and the
 > dashboard; it previously used the raw quantile-derived method Phase 4 showed loses, and the `S =
-> s` policy shown here to lose on cost — see "Where it fails"). LightGBM is the model served, and
-> under the repaired policy it beats SeasonalNaive and is cost-tied with every other model tested. MinTrace reconciliation's item-level gain
+> s` policy shown here to lose on cost — see "Where it fails"). **Since v1.2 the served model is a
+> trailing 28-day mean** (`TrailingMeanModel`, the ladder's MovingAverage rung), not LightGBM: under
+> the repaired policy it beats SeasonalNaive and is cost-tied with LightGBM and every other model
+> tested, and it needs no features, no forward-exog proxy and no trained artifact. **The P10/P90
+> that `/forecast` and the dashboard show are now derived from the same residual calibration that
+> sizes the reorder point**, not read off a model. MinTrace reconciliation's item-level gain
 > (Phase 5, run on AutoETS, not the production model) does not survive a bootstrap; a FastAPI
 > service, batch scoring, Docker image, CI,
 > monitoring, and a Streamlit dashboard sit on top of it (Phase 6) — see "Results" and
@@ -195,7 +199,8 @@ See [`docs/data.md`](docs/data.md).
 
 ## Quickstart
 
-**macOS prerequisite:** `brew install libomp` (LightGBM's OpenMP runtime).
+**macOS prerequisite:** `brew install libomp` (LightGBM's OpenMP runtime — the model ladder still
+imports it, though the served model no longer uses it).
 
 ```bash
 make setup      # uv sync + pre-commit install
@@ -208,10 +213,10 @@ make breakeven  # solve the holding rate where LightGBM/SeasonalNaive cost the s
 make optimal-target # critical ratio + extended service-target grid; ranking at the cost-optimum
 make penalty    # ranking sensitivity to the lost-sale cost and the service target
 make croston    # Croston family (Classic/SBA/TSB), accuracy + shipped-policy cost by bucket
-make production-model # do LightGBM's quantiles feed sizing? cost vs LightGBM, run cost, coverage
+make production-model # do LightGBM's quantiles feed sizing? cost vs LightGBM, run cost, interval coverage
 make data-full  # full M5, all 3 categories — needed for reconcile
 make reconcile  # hierarchical reconciliation experiment, writes reports/reconciliation_<date>.md
-make train      # fit + persist the production LightGBM model and its safety-stock calibration
+make train      # fit + persist the served model (trailing 28-day mean) and its safety-stock calibration
 make calibrate  # refit only the calibration `make serve` sizes with (after a config/lead-time change)
 make serve      # FastAPI at :8000 — GET /health, POST /forecast, POST /reorder, GET /metrics
 make score      # batch-score every series, writes outputs/reorder_<date>.csv
@@ -233,6 +238,7 @@ raw data → ingest → canonical long table → feature pipeline (point-in-time
     → rolling-origin backtester → quantile forecasts (P10/P50/P90)
     → decision layer (reorder point, safety stock, order qty, cost sim)
     → FastAPI + Streamlit, with drift/accuracy monitoring
+       (served model: trailing 28-day mean; displayed intervals from the safety-stock calibration)
 ```
 
 ## Results
@@ -583,7 +589,8 @@ and not a tested claim. Also worth stating plainly: this ran on AutoETS, not the
 so it says nothing about LightGBM either way.
 
 **Serving (Phase 6)** — the pipeline is now a running service, not just a report generator:
-`reorderpoint/train.py` persists the production LightGBM model; `serve.py` exposes it as a FastAPI
+`reorderpoint/train.py` persists the production model (LightGBM through v1.1, a trailing 28-day
+mean since v1.2); `serve.py` exposes it as a FastAPI
 app (`/health`, `/forecast`, `/reorder`, `/metrics`) and a `make score` batch job sharing the same
 decision logic; a Dockerfile packages it (image doesn't train on boot — see docs/serving.md);
 `.github/workflows/ci.yml` runs lint + the full test suite (including a real, not mocked,
@@ -614,7 +621,8 @@ LightGBM, and the only model besides LightGBM to clear the coverage bar. It also
 decision cost** (at 2%/day): 18% more expensive than LightGBM, 13% more expensive than plain
 SeasonalNaive — and worse than both at every holding rate (at 25%/yr: $11,453 vs. $7,565 and $6,936).
 Per this project's own Phase 7 acceptance bar ("keep only if it wins on decision cost"), **NBEATS
-is not adopted** — LightGBM stays the production model. Worth being direct about this rather than
+is not adopted** — LightGBM stays the production model (until v1.2, which replaced it with a
+trailing mean; see "Where it fails"). Worth being direct about this rather than
 quietly shelving the result: the headline model of the "stretch" phase lost, and that's the more
 useful finding, not a disappointing one.
 
@@ -691,19 +699,31 @@ guesses.
   findings about the same models on the same panel; neither is "the" answer, because the answer is
   a function of the policy. LightGBM's lead over AutoTheta is not distinguishable at any rate under
   `S = s`; NBEATS is worse than SeasonalNaive at every rate tested (point estimates — no per-series
-  data to bootstrap, and not re-run under the new policy). LightGBM is still what is served, but
-  the original reason, its calibrated intervals, no longer supports the *reorder decision*: its
+  data to bootstrap, and not re-run under the new policy). LightGBM was served through v1.1, but
+  the original reason, its calibrated intervals, does not support the *reorder decision*: its
   native P10/P90 feed no part of it (sizing is the P50 lead-time mean plus a buffer from pooled
   empirical residuals; scrambling every model's P10/P90 leaves reorder points, order-up-to levels
   and cost identical to the last bit). On cost it is tied with every RMSSE-cluster member and the
   Croston family under the shipped policy — all six paired-bootstrap CIs contain zero, pooled and by
   intermittency bucket — and beats only SeasonalNaive
-  ([`reports/production_model_2026-09-29.md`](reports/production_model_2026-09-29.md)). What its
-  intervals are still used for is display (`/forecast`, the dashboard fan chart), where its 81%
-  P10–P90 coverage against 59–64% for the alternatives is the one remaining difference. On
-  operational grounds alone (seconds to fit, no feature or forward-exog pipeline, no 110 MB
-  artifact, no leakage surface) a Croston-family model would be simpler to serve; whether to switch
-  is an open decision, not one made here. Every figure is
+  ([`reports/production_model_2026-09-29.md`](reports/production_model_2026-09-29.md)). The one
+  place its intervals still reached a user was display (`/forecast`, the dashboard fan chart), where
+  its 81% P10–P90 coverage against 59–64% for the alternatives came from alphas tuned to hit that
+  number and did not describe the buffer actually stocked. **v1.2 settled both.** The
+  displayed band is now `P50 ± z(0.9) · σ / √lead time` from the same residual calibration that
+  sizes the reorder point, so what is shown follows what is decided: held out, the reorder point
+  covered realised lead-time demand in 94.8–95.1% of 6,400 windows against its 95% target, and
+  the 80% band covered 87% of lead-time totals and 91% of days (wider than nominal, the safe side:
+  demand is mostly zeros and the lower edge is clipped). And the served model is now the trailing
+  28-day mean — the ladder's MovingAverage rung, forecasting the same numbers (checked row for row),
+  +$11 per fold against LightGBM [−$34, +$51], fitting in about 0.1 s on the 400-series fold against
+  23 s, with no feature pipeline, no forward-exog proxy and about 1 MB instead of 110 MB. It was
+  chosen for being the simplest model that is cost-tied, not for winning: the CI on the cost
+  difference is about ±10% of cost, so this is a tie the comparison could not break, not a proof of
+  equivalence; and it gives up a day-to-day shape and any response to price or event columns, which
+  this panel's cost results could not show mattering. The package still imports LightGBM and
+  statsforecast through the model ladder, so the image does not get smaller in dependencies — only
+  in what it fits and stores. Every figure is
   conditional on the two cost parameters (holding rate: named source, not retail-specific; lost
   margin: Walmart U.S., a lower bound), the service target, and the ordering policy — see "The
   finding".

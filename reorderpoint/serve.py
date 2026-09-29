@@ -63,9 +63,22 @@ def get_calibration() -> SafetyStockCalibration:
     fallback to raw quantile-derived sizing: that is the method Phase 4 showed loses, and serving
     it silently is how this system ended up doing so."""
     try:
-        return _load_calibration()
+        calibration = _load_calibration()
+        model = _load_model()
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    # The residuals are one model's; sizing and bands drawn from another's are wrong without
+    # looking wrong. Models that do not name themselves are not checked.
+    served = getattr(model, "name", None)
+    if served is not None and served != calibration.model_name:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"the calibration was fitted for {calibration.model_name} but the served model "
+                f"is {served}; rerun `make train`"
+            ),
+        )
+    return calibration
 
 
 def size_decisions(
@@ -88,7 +101,7 @@ def size_decisions(
         on_hand,
         costs.lead_time_days,
         costs.service_level_target,
-        safety_stock=calibration.safety_stock(costs.service_level_target),
+        safety_stock=calibration.safety_stock(costs.service_level_target, series_ids=on_hand.index),
         lot_multiple=costs.lot_multiple,
     )
 
@@ -124,10 +137,14 @@ def forecast(
     req: ForecastRequest,
     model: QuantileForecaster = Depends(get_model),
     panel: pd.DataFrame = Depends(get_history),
+    calibration: SafetyStockCalibration = Depends(get_calibration),
 ) -> list[dict]:
+    """P50 from the model; `p10`/`p90` from the safety-stock calibration, not the model — the same
+    residual calibration `/reorder` sizes with, so the band and the reorder point agree."""
     _validate_series_ids(panel, req.series_ids)
     future_exog = future_exog_from_trailing_window(panel, req.series_ids, req.horizon)
     preds = model.predict_quantiles(req.horizon, future_exog=future_exog)
+    preds = calibration.calibrated_interval(preds)
     preds = preds[preds["series_id"].isin(req.series_ids)].sort_values(["series_id", "date"])
     preds["date"] = preds["date"].dt.strftime("%Y-%m-%d")
     return preds.to_dict("records")

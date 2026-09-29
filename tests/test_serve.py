@@ -88,9 +88,12 @@ def test_forecast_returns_quantiles_for_requested_series(client):
     body = resp.json()
     assert len(body) == 7
     assert all(row["series_id"] == "A" for row in body)
-    assert body[0]["p10"] == 1.0
     assert body[0]["p50"] == 2.0
-    assert body[0]["p90"] == 3.0
+    # p10/p90 come from the calibration, not the model: the dummy model's own 1.0 / 3.0 are ignored.
+    # Calibration residuals [3, -2] -> sigma 3.5355 over a 7-day lead time -> daily half-width
+    # z(0.9) * 3.5355 / sqrt(7) = 1.7126 around the P50 of 2.
+    assert body[0]["p10"] == pytest.approx(2.0 - 1.7126, abs=1e-3)
+    assert body[0]["p90"] == pytest.approx(2.0 + 1.7126, abs=1e-3)
 
 
 def test_forecast_unknown_series_is_404(client):
@@ -170,3 +173,26 @@ def test_future_exog_day_one_is_consistent_across_horizons():
                 f"day 1 price changed with horizon={horizon}: "
                 f"{day_one_price} != {reference_price}"
             )
+
+
+def test_a_calibration_fitted_for_another_model_is_refused(monkeypatch):
+    class _Named(_DummyModel):
+        name = "MovingAverage"
+
+    monkeypatch.setattr(serve, "_load_model", lambda: _Named())
+    monkeypatch.setattr(serve, "_load_calibration", _calibration)  # fitted for "LightGBM"
+    with pytest.raises(serve.HTTPException) as excinfo:
+        serve.get_calibration()
+    assert excinfo.value.status_code == 409
+    assert "LightGBM" in excinfo.value.detail and "MovingAverage" in excinfo.value.detail
+
+
+def test_a_matching_or_unnamed_model_passes_the_calibration_check(monkeypatch):
+    class _Named(_DummyModel):
+        name = "LightGBM"
+
+    monkeypatch.setattr(serve, "_load_calibration", _calibration)
+    monkeypatch.setattr(serve, "_load_model", lambda: _Named())
+    assert serve.get_calibration().model_name == "LightGBM"
+    monkeypatch.setattr(serve, "_load_model", lambda: _DummyModel())  # no `name`: not checked
+    assert serve.get_calibration().model_name == "LightGBM"

@@ -233,8 +233,9 @@ def _bare_chart_layout(fig: go.Figure, height: int = 280) -> go.Figure:
 
 
 def build_fan_chart(forecast: pd.DataFrame) -> go.Figure:
-    """P10-P90 shaded band + P50 line, replacing the old 3-separate-line chart — see dataviz
-    skill's mark specs (thin lines, direct end label via hover, recessive gridlines)."""
+    """80% band + P50 line, replacing the old 3-separate-line chart — see dataviz skill's mark
+    specs (thin lines, direct end label via hover, recessive gridlines). `forecast` must already
+    carry the calibrated band (`SafetyStockCalibration.calibrated_interval`), not the model's."""
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
@@ -244,7 +245,7 @@ def build_fan_chart(forecast: pd.DataFrame) -> go.Figure:
             fillcolor=BLUE_BAND,
             line=dict(color="rgba(0,0,0,0)"),
             hoverinfo="skip",
-            name="P10–P90",
+            name="80% band",
         )
     )
     fig.add_trace(
@@ -410,9 +411,17 @@ def main() -> None:
     with chart_col:
         st.subheader("Forecast")
         future_exog = future_exog_from_trailing_window(panel, [series_id], horizon)
-        forecast = model.predict_quantiles(horizon, future_exog=future_exog)
+        forecast = calibration.calibrated_interval(
+            model.predict_quantiles(horizon, future_exog=future_exog)
+        )
         st.plotly_chart(
             build_fan_chart(forecast), width="stretch", config={"displayModeBar": False}
+        )
+        st.caption(
+            "The band comes from the same calibrated forecast errors that size the reorder "
+            f"point above ({calibration.model_name}, {calibration.lead_time_days}-day lead time, "
+            f"calibrated through {calibration.calibrated_through:%Y-%m-%d}) — not from the "
+            "model's own quantiles. Daily errors are treated as independent."
         )
     with history_col:
         st.subheader("History")

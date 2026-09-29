@@ -77,8 +77,10 @@ croston:
 
 # Is LightGBM still the right model to serve? Runs the shipped policy with every model's P10/P90
 # scrambled (do the native quantiles feed sizing?), paired-bootstrap cost of each cluster member
-# and the Croston family against LightGBM, and fit time / interval coverage
-# (reports/production_model_*.md). Reuses the caches `make croston` extends.
+# and the Croston family against LightGBM, fit time / interval coverage, the calibrated interval
+# `/forecast` shows against the native one, and that the served trailing mean forecasts what the
+# ladder's MovingAverage does (reports/production_model_*.md). Reuses the caches `make croston`
+# extends. Re-times every model, AutoTheta included: several minutes.
 production-model:
 	uv run python -m reorderpoint.production_model
 
