@@ -19,7 +19,9 @@ results.
 
 ## The findings under test, and what "replicated" will mean
 
-Each rule is set in advance so the answer cannot be adjusted to the result. All use paired bootstrap
+Each rule is set in advance so the answer cannot be adjusted to the result. **Every verdict is judged on the
+primary panel (below).** The robustness panel is reported alongside as agrees or disagrees, under the same
+rule, and is never used to choose the more favourable result. All use paired bootstrap
 95% intervals (series resampled, 2,000 draws, as elsewhere in the repository) and the shipped cell
 (`S = s + 2 × lead-time demand`, 95% target, normal form, intermittency buckets) unless stated.
 
@@ -76,16 +78,44 @@ the public data has no costs, margins or lead times.
 - **Service target 95%, lot multiple 2.0** (Track A's shipped cell), plus `S = s` (lot multiple 0) for
   finding 1. No ordering cost is priced, as in Track A.
 
-## Series selection
+## Series selection: a primary panel and a pre-declared robustness panel
 
-A SKU is in if it sold in at least **26 of the first 52 weeks**. This was fixed before any model was
-run. The cleaning report then showed, from descriptive statistics alone, what it does: it keeps
-year-round sellers and cannot select a SKU first sold in year 2 or a short-season one, so the panel
-shrinks to 73% of its year-1 units in year 2 while the company as a whole is flat (94%), and its
-autumn peak is much weaker than the company's (`reports/track_b_cleaning_*.md`). That is a property of
-the rule, and the results will be read as **results for the catalogue's steady sellers**, not for the
-business as a whole. Whether to add a second panel (for example a rule that admits seasonal SKUs) is
-decided with that report in hand and recorded under "Changes after registration" if it happens.
+**Primary panel: a SKU is in if it sold in at least 26 of the first 52 weeks (1,742 SKUs).** Fixed before
+any model was run, and unchanged.
+
+**Robustness panel: at least 13 of the first 52 weeks (2,666 SKUs).** Added on 2026-09-29 after the
+descriptive cleaning report and before any model was run (see "Changes after registration": an addition,
+not a change). It is a strict superset of the primary panel, 924 SKUs larger. Its rule is registered here,
+in advance, exactly as the primary's is:
+
+- **The verdict on each finding is the primary panel's.** The robustness panel gets the identical rule,
+  applied to its own results, and is reported as **agrees** (same verdict) or **disagrees** (different
+  verdict) next to the primary's. The headline states the primary verdict first; where the panels
+  disagree, the headline says so. Neither panel's result replaces the other, and the robustness panel is
+  never used to pick the more favourable of two answers.
+- Everything else (economics, folds, models, sensitivity grid, bootstrap) is identical across panels.
+- Also reported, descriptively and with no verdict attached: the 924 SKUs the robustness panel adds, as a
+  separate stratum, because they are the short-season end of the catalogue (below).
+
+### What the two panels cover, and what they do not
+
+- **Both select on first-year activity, which is correct**: it looks at nothing in the test folds, so there
+  is no look-ahead. The same property means **both exclude the 652 SKUs first sold in year 2** (19.3% of
+  year-2 units). The findings apply to products with at least a year of history. Cold start, a product with
+  no history to forecast from, is a separate known limitation that neither panel addresses.
+- **The primary panel is declining**: its year-2 units are 73% of year 1, against 94% company-wide.
+  That is the pattern selecting strong year-1 sellers produces, since they then fade. It tests **mature
+  products with muted seasonality** (Sep-Nov over Mar-Jul: 1.34 in year 1, 1.28 in year 2).
+- **The robustness panel is where more of the seasonal products are, but it is not a substitute for
+  them.** Measured before any model: its Sep-Nov over Mar-Jul is 1.47 (year 1) and 1.40 (year 2); the 924
+  SKUs it adds run 2.81 and 2.32 on their own, but carry only 11.1% of company units. Mean weekly units in
+  fold 4's window (2011-09-05 to 2011-11-28) against the 39 weeks before it: **1.32 for the primary panel,
+  1.43 for the robustness panel, 1.81 for the company.** The robustness panel also declines, to the same
+  73% of year 1. So the autumn-peak test lives mainly in the robustness panel, and mainly in its added
+  stratum, but neither panel reproduces the company's build-up, and no result here says how the models
+  cope with the company's peak as a whole.
+- Weekly zero share (open weeks): primary 28.8%, robustness 41.7%, the added stratum 66.1%, all cleaned
+  SKUs 59.9%.
 
 ## Evaluation design
 
@@ -113,7 +143,8 @@ decided with that report in hand and recorded under "Changes after registration"
 ## Known limits, stated before the results
 
 - One business, two years, one prior holiday season.
-- Series selection is by year-1 survival (above).
+- Series selection is by year-1 activity (above): products with at least a year of history only, cold
+  start not covered, and both panels decline over the test period.
 - `y` is sales, not demand; stockouts are unobserved.
 - Costs, margin and lead time are assumptions; the sensitivity grid is the defence.
 - Weekly aggregation removes most zero periods (the panel is about 29% zeros against Track A's 77%),
@@ -123,4 +154,10 @@ decided with that report in hand and recorded under "Changes after registration"
 
 ## Changes after registration
 
-None yet.
+- **2026-09-29, before any model was run: robustness panel added** (at least 13 of the first 52 weeks,
+  2,666 SKUs), alongside the unchanged primary panel (at least 26, 1,742 SKUs). Reason: the cleaning
+  report showed, from descriptive statistics alone, that the registered rule keeps year-round sellers and
+  understates the seasonal end of the catalogue. Decided by the project owner from that report. This is an
+  addition: the primary rule, the economics, the folds and the replication rules are untouched, and the
+  robustness panel's role (agrees or disagrees, never a substitute) was registered in the same commit that
+  introduced it.
