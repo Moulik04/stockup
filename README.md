@@ -149,7 +149,8 @@ the range, but only just, and the third correction found the policy the ranking 
 was itself broken, which reversed the sign entirely. Accuracy metrics never ask what things cost or
 what policy realises the forecast, which is why they are easy to compute and can be silently
 uninformative; a decision-focused project is only as credible as the cost inputs and the operating
-policy it can defend. That is the case for Track B (real costs), and for the dashboard sliders below.
+policy it can defend. That is why the economics here are stated as sourced assumptions with the ranking
+swept across them, on both tracks, and why the dashboard has sliders.
 
 > Status: Phase 7 (deep model, stretch) done, plus v1.1's uncertainty work. **Corrected headline,
 > twice over:** the Phase 4 claim that LightGBM wins on simulated cost held only under three
@@ -191,11 +192,17 @@ cost assumptions.
 ## Data
 
 - **Track A (public, in this repo):** [M5 Forecasting](https://www.kaggle.com/c/m5-forecasting-accuracy) — Walmart daily unit sales, hierarchical (item × store × dept × category × state).
-- **Track B (private):** a real small-business SKU-level sales history, run through the identical
-  pipeline via a config switch. Never committed; results reported in aggregate only. The loader
-  (`load_track_b`) is implemented and schema-tested against a fixture matching the documented
-  contract (`data/track_b/README.md`) — the real export hasn't been provided yet, so there's no
-  Track B case study in this README (yet). Everything else in this repo runs on Track A alone.
+- **Track B (public, downloaded by script):** [UCI Online Retail II](https://archive.ics.uci.edu/dataset/502/online+retail+ii)
+  — transactions of a small UK online gift-ware seller with many wholesale customers, 2009-12 to
+  2011-12 (Chen, D. (2012). Online Retail II [Dataset]. UCI Machine Learning Repository.
+  <https://doi.org/10.24432/C5CG6D>, CC BY 4.0). The question it answers is external validity: M5 is
+  a giant retailer, this is a very different real business, and Track B asks whether the findings
+  replicate there. Cleaned and aggregated to SKU × week (`docs/data.md`, `docs/track_b.md`), then run
+  through the identical pipeline via the `REORDERPOINT_TRACK=b` switch. The raw file is not
+  committed (`make data-b` downloads it). The public data has no cost information, so its economics
+  are stated assumptions (`docs/track_b.md`), exactly as Track A's are. **No Track B model results
+  yet: the data is cleaned and documented, the models have not been run.** (The earlier plan for
+  Track B, a private business's own export, was dropped: that data will not be available.)
 
 See [`docs/data.md`](docs/data.md).
 
@@ -207,6 +214,7 @@ the test suite use it; the served model and the container do not).
 ```bash
 make setup      # uv sync + pre-commit install
 make data       # download and ingest Track A (M5), HOBBIES only — fast day-to-day iteration
+make data-b     # Track B: download UCI Online Retail II, clean to the weekly SKU panel, write reports/track_b_cleaning_<date>.md
 make backtest   # rolling-origin backtest, writes reports/backtest_<date>.md
 make divergence # are the models actually different? writes reports/model_divergence_<date>.md
 make decide     # reorder policy + cost simulation, writes reports/decision_<date>.md
@@ -473,7 +481,8 @@ realistic rate, moving toward the optimum cuts cost by ~41–45%. And realised C
 at a 99.9% nominal target, short of the critical ratio those costs imply. An earlier version of this
 paragraph read that saturation as evidence for the `S = s` policy structure *from the sweep's grid
 edge*; that inference was wrong — the edge was the cost structure — and the subsections below give
-the actual evidence. The 25% figure is an assumption; a real holding cost (Track B) replaces it.
+the actual evidence. The 25% figure is an assumption; a business's own holding cost would replace it (Track B, public data
+with no cost information, uses the same assumption).
 
 **Stockout penalty: from a flat $5 to lost margin (v1.1).** The other unsourced parameter had the
 same defect: a flat $5.00 per lost unit against a mean item price of $5.91, i.e. a lost sale priced
@@ -776,8 +785,8 @@ guesses.
   source rather than illustrative defaults — holding 25%/yr (a cross-industry average) and a lost
   sale at Walmart U.S.'s 27.5% gross margin (right retailer, not the hobby category, a lower bound) — and the
   ranking is swept against both (`reports/penalty_sensitivity_*.md`). Unit cost is still a price
-  proxy. Track B's real carrying cost, lost-sale margin (plus whatever a lost customer costs) and
-  COGS settle them. It costs nothing to do and everything trading holding against stockout — the
+  proxy. A business's own carrying cost, lost-sale margin (plus whatever a lost customer costs) and
+  COGS would settle them; neither track has any, and Track B's are assumptions too. It costs nothing to do and everything trading holding against stockout — the
   ranking, the cost-optimal service level, the size of the calibration-scheme saving — depends on
   them.
 - **Lot sizing: done for `S = s + Q`; an inventory-position trigger and a real EOQ are what's left.**
@@ -785,7 +794,7 @@ guesses.
   undershoot, not sizing failures) and fixed it: `S = s + 2 × lead-time demand` cuts pooled cost by
   71% at the default target and reverses the model ranking (see "The finding"). What it does not
   do: no fixed cost per order is priced, so the multiple was chosen for service, not as an EOQ —
-  Track B's real ordering cost would tell you if 2× under- or over-shoots the economic lot; and the
+  a real ordering cost (neither track has one) would tell you if 2× under- or over-shoots the economic lot; and the
   trigger itself is untouched (`on_hand < s`, one order at a time), so an inventory-position
   trigger that counts stock already on order might close more of the residual 51% undershoot share
   than a bigger `Q` does.
@@ -801,7 +810,7 @@ guesses.
 - **A per-SKU service target from the critical ratio,** instead of one uniform 95%. At the legacy
   2%/day the critical ratio spans ~68% to ~97% across SKUs with price, so a uniform target is wrong
   for most; at the 25%/yr default it is ≥98.4% for nearly all (p10 0.984), and the per-SKU case
-  largely disappears. Revisit with Track B's costs, and validate on a fresh time window.
+  largely disappears. Revisit with a real business's costs, and validate on a fresh time window.
 - **Exogenous features for NBEATS.** The Phase 7 comparison is confounded by feature richness, not
   just architecture — LightGBM sees price/calendar/SNAP, NBEATS sees none. `neuralforecast`
   supports `futr_exog_list`/`hist_exog_list`; wiring the same feature set in would make the
@@ -819,5 +828,5 @@ guesses.
   property recursive forecasting has, at the cost of an expanded training set (28x rows, one per
   origin/horizon-step pair).
 - **A real demand-censoring correction.** `y` (units sold) under-counts true demand during
-  stockouts; Track B's `on_hand` field, once available, could support inferring when that's
-  happening and correcting for it — not attempted in v1.
+  stockouts; neither track has an on-hand field, so nothing here can infer when that's happening.
+  A business's own inventory records could support a correction — not attempted in v1.

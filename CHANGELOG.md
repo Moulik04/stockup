@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Track B is now a public dataset, UCI Online Retail II**, not a private business's export (that data
+  will not be available). A small UK online gift-ware seller with wholesale customers, 2009-2011, cleaned
+  to a weekly SKU panel (`make data-b`, `reorderpoint/online_retail.py`, rules and counts in
+  `docs/data.md`). Its purpose is external validity: whether the Track A findings replicate at a very
+  different real business. The design, the economics (USD at one fixed GBP rate; margin, holding cost and
+  lead time as documented assumptions with sensitivity) and the rules for what counts as a replication were
+  registered in `docs/track_b.md` before any model was run. **No Track B model results yet.**
+- The private-export loader, its `TRACK_B_DATA_PATH` setting and its fixture were removed, and every
+  statement that "Track B's real costs" would settle an assumption was reworded: neither track has any.
+
 ## v1.2.1 — 2026-09-29
 
 The serving image is now built and queried in CI, and what had been claimed about it is corrected.

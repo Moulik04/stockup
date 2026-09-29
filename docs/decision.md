@@ -243,9 +243,11 @@ the decision does not turn on which figure inside that range is picked. The orig
 is *not* a property of the holding rate alone: it scales with the lost-sale cost and depends on the
 service target (~36%/yr at the cost-optimal target) — the next two sections.
 
-**Track B:** replace it with the business's real carrying cost (capital cost + storage + shrink +
+**A real business:** replace it with its own carrying cost (capital cost + storage + shrink +
 obsolescence, as an annual fraction of unit cost), divided by 365. Then `make breakeven` re-solves
-the crossover, and the README figure and dashboard slider follow.
+the crossover, and the README figure and dashboard slider follow. Track B (UCI Online Retail II) is
+public data with no cost information, so it uses this same 25%/yr as an assumption
+(`docs/track_b.md`).
 
 **Stored runs are not restated.** Every Phase 4 and ablation artifact on disk was simulated at the
 legacy 0.02/day. New runs stamp the rate they used (`holding_cost_rate` column,

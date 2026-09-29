@@ -92,7 +92,7 @@ genuinely computable from the real future date regardless of any external system
 
 This is a disclosed proxy, the same kind of simplification as `y`-as-demand-proxy in
 `docs/data.md` — not hidden inside the code. It affects price/event/SNAP columns; a Track B
-deployment barely notices, since Track B's schema doesn't carry those columns at all
+panel barely notices, since it carries only a weekly price and no calendar, event or SNAP columns
 (`features.py`'s feature list already degrades gracefully to whatever columns are present).
 
 ## Docker

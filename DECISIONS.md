@@ -2304,3 +2304,62 @@ package does that.
   fit) and asserts it exits 0, so the order stays known to work and CI checks it on Linux. It
   deliberately does not run the crashing order: asserting a segfault would test one platform's
   behaviour, not anything this project controls.
+
+## 2026-09-29 — Track B becomes UCI Online Retail II: cleaning, registration, and one open decision
+
+**Context:** Track B was to be MJ's own business data, run through the same pipeline as a private
+case study. That data will not be available. Track B is now a second *real* business from a public
+dataset — UCI Online Retail II (Chen 2012, CC BY 4.0), a small UK online seller of gift-ware with many
+wholesale customers — to test external validity: M5 is a giant retailer, and the question is whether the
+findings (policy over model, a calibrated quantile with a policy-caused shortfall, the cost tie among
+models) replicate somewhere very different. Reported either way, with the rules for each fixed first.
+
+**Decisions.**
+- *The private-export loader is removed, not kept.* It described a business that will not exist, and a loader for a schema nobody will produce is dead code
+  that misleads. `TRACK_B_DATA_PATH` and `Config.track_b_data_path` went with it; `load_track_b` now
+  builds the Online Retail panel. Every passage that said Track B's real costs would settle an assumption
+  was reworded: neither track has costs, and Track B's are assumptions like Track A's.
+- *Licence and citation taken from the UCI page itself*, not memory: CC BY 4.0, and the APA string UCI
+  gives. Only that page is used as the source.
+- *Cleaning* (`docs/data.md` has every rule with its count and reason). The choices that were not
+  obvious: **cancellations are netted against the same customer's earlier sale of the same SKU (90 days)**,
+  not against the week they are recorded in — checked on the data first: cancellations are 4.2% of units,
+  92% match such a sale, and the two largest lines in the file (80,995 and 74,215 units) are orders
+  cancelled by the same customer within minutes, which week-of-cancellation netting would leave standing
+  whenever the two straddle a Sunday. **Bulk orders are kept** (wholesale is the business). **All
+  countries are kept** (one stock, one replenishment decision; 82% of units are UK). **Exact duplicate
+  lines within a sheet are kept** (0.30% of units, unknowable whether errors). Non-cancellation negatives
+  (all price 0, no customer: write-offs) and zero-price lines (2.2% of units, no revenue) are dropped.
+- *Weekly grain, 104 complete weeks* (2009-12-07 to 2011-11-28), not the ~105 in the brief: the first and
+  last weeks the data touches are partial.
+- *Series selection, fixed before any model:* sold in at least 26 of the first 52 weeks (1,742 SKUs).
+
+**Caught on the way, before any model.** (1) The first cleaning draft treated `15056BL` and `15056bl` as
+different products: 174 codes were split by case or a trailing space, which would have spread each
+product's demand over two series. Found by listing the codes before choosing a selection rule, fixed as
+a logged first rule, tested. (2) The sheet overlap (nine days in both workbook sheets) would have
+double-counted 182,448 units; the rule checks the two copies are identical before dropping one, and
+raises if not. (3) My first report draft said the bulk orders were "what a Gaussian buffer handles
+worst" — a prediction about a result I had not produced, removed. (4) The first seasonality plot
+showed the selected SKUs falling to 73% of their year-1 volume while the company was flat (94%). That is
+the selection rule, not the business: it cannot pick a SKU first sold in year 2 (652 of them, 19% of
+year-2 units) or a short-season one (Sep-Nov over Mar-Jul: 1.34 for the selected SKUs, 3.77 for the
+rest). Reported in `reports/track_b_cleaning_2026-09-29.md` and `docs/track_b.md`, with a three-panel plot
+so the company and the panel sit side by side.
+
+**Registered before any model** (`docs/track_b.md`): USD at one fixed rate of 1.5770 (the mean of the 25
+monthly Federal Reserve H.10 averages, Dec 2009 to Dec 2011, via FRED `EXUSUK`); gross margin 27.5% held
+equal to Track A on purpose, with 20/27.5/40/50% all reported (it is probably too low for a wholesaler,
+which the grid is for); holding 25%/yr; lead time 2 weeks with 1 and 4 as sensitivity; 4 folds of 13 weeks
+over the final 52 weeks, the last containing the 2011 autumn build-up, with 2010 as the only prior year
+(stated as a limitation, not hidden); explicit "replicated" rules for the four findings under test.
+
+**Open, deliberately: the series-selection rule.** It was registered first and discovered to bias the
+panel towards steady year-round sellers. It has not been changed: changing a rule after looking at the
+data, even descriptive data, is exactly what registering it is meant to prevent, and the choice belongs
+to MJ. Options and their costs are in the checkpoint summary. No model has been run.
+
+**Not verified:** the FX rate is an average, not the seller's realised rate; the margin has no
+business-specific source; "discontinued or stocked out" cannot be told apart in sales data; the
+cancellation window (90 days) covers 93% of matchable cancelled units and was chosen from that count, on
+the same data it is applied to (a descriptive choice, with no model in the loop).
