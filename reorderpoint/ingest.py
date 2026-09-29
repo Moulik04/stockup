@@ -24,7 +24,7 @@ CORE_COLUMNS = ["series_id", "date", "y", "price"]
 
 TRACK_A_RAW_DIR = REPO_ROOT / "data" / "track_a" / "raw"
 TRACK_A_PROCESSED = REPO_ROOT / "data" / "track_a" / "processed" / "panel.parquet"
-TRACK_B_PROCESSED = online_retail.TRACK_B_PROCESSED
+TRACK_B_PROCESSED = online_retail.PROCESSED_DIR / "primary" / "panel.parquet"
 
 
 def load_track_a(
@@ -80,11 +80,14 @@ def load_track_a(
     return long[keep].sort_values(["series_id", "date"]).reset_index(drop=True)
 
 
-def load_track_b(raw_path: Path = online_retail.RAW_XLSX) -> pd.DataFrame:
-    """The Online Retail II workbook as the canonical weekly SKU panel (cleaning rules, series
-    selection and the reasons for each are in `online_retail.py` and `docs/data.md`)."""
-    panel, _ = online_retail.build_panel(online_retail.load_raw(raw_path))
-    return panel[CORE_COLUMNS].reset_index(drop=True)
+def load_track_b(raw_path: Path = online_retail.RAW_XLSX, panel: str = "primary") -> pd.DataFrame:
+    """The Online Retail II workbook as the canonical weekly SKU panel: `panel` is "primary" (sold
+    in at least 26 of the first 52 weeks) or "robustness" (at least 13). Cleaning rules, series
+    selection and the reasons for each are in `online_retail.py` and `docs/data.md`."""
+    frame, _ = online_retail.build_panel(
+        online_retail.load_raw(raw_path), online_retail.MIN_ACTIVE_BY_PANEL[panel]
+    )
+    return frame[[*CORE_COLUMNS, "month", "weekofyear"]].reset_index(drop=True)
 
 
 def main() -> None:
@@ -110,8 +113,8 @@ def main() -> None:
             raise SystemExit(
                 f"{online_retail.RAW_XLSX} not found: run scripts/download_online_retail.py"
             )
-        panel = load_track_b()
-        out_path = TRACK_B_PROCESSED
+        online_retail.write_panels(online_retail.load_raw())
+        return
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     panel.to_parquet(out_path, index=False)

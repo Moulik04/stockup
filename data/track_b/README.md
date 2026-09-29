@@ -15,9 +15,12 @@ are wholesalers. 1,067,371 invoice lines between 2009-12-01 and 2011-12-09.
 - `raw/online_retail_II.xlsx` — the UCI workbook (two sheets), fetched by
   `scripts/download_online_retail.py`. Not committed.
 - `raw/online_retail_II.parquet` — a cache of it, so the 30-second xlsx read happens once. Not committed.
-- `processed/panel.parquet` — the cleaned weekly SKU panel (`series_id`, `date` = the Monday,
-  `y` = net units, `price` = USD unit value), written by `python -m reorderpoint.online_retail` /
-  `REORDERPOINT_TRACK=b python -m reorderpoint.ingest`. Not committed.
+- `processed/primary/panel.parquet` and `processed/robustness/panel.parquet` — the cleaned weekly SKU
+  panels (`series_id`, `date` = the Monday, `y` = net units, `price` = USD unit value, `month`,
+  `weekofyear`), written by `python -m reorderpoint.online_retail`. The primary panel is the SKUs that
+  sold in at least 26 of the first 52 weeks; the robustness panel, a superset, at least 13
+  (`docs/track_b.md`). Select one with `TRACK_B_PANEL=primary|robustness` (default primary). Each panel's
+  forecast and calibration caches are written beside it. Not committed.
 
 ## What is done to it
 

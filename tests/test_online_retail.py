@@ -322,7 +322,8 @@ def test_load_track_b_returns_the_canonical_columns(tmp_path):
     )
     original.to_parquet(workbook.with_suffix(".parquet"), index=False)
     panel = load_track_b(workbook)
-    assert list(panel.columns) == CORE_COLUMNS
+    assert list(panel.columns) == [*CORE_COLUMNS, "month", "weekofyear"]
+    assert panel["weekofyear"].between(1, 53).all() and panel["month"].between(1, 12).all()
     assert str(panel["date"].dtype).startswith("datetime64")
     assert pd.api.types.is_numeric_dtype(panel["y"]) and pd.api.types.is_numeric_dtype(
         panel["price"]
@@ -332,3 +333,21 @@ def test_load_track_b_returns_the_canonical_columns(tmp_path):
 
 def test_the_fixed_exchange_rate_is_the_documented_one():
     assert orr.GBP_TO_USD == 1.577
+
+
+def test_the_robustness_panel_is_a_strict_superset_of_the_primary():
+    raw = _year(
+        {
+            "10001": range(0, 26),  # 26 of the first 52 weeks: both panels
+            "10002": range(0, 13),  # 13: the robustness panel only
+            "10003": range(0, 12),  # 12: neither
+        }
+    )
+    primary, _ = orr.build_panel(raw, orr.MIN_ACTIVE_BY_PANEL["primary"])
+    robust, _ = orr.build_panel(raw, orr.MIN_ACTIVE_BY_PANEL["robustness"])
+    assert sorted(primary["series_id"].unique()) == ["10001"]
+    assert sorted(robust["series_id"].unique()) == ["10001", "10002"]
+    # a SKU in both panels has identical rows in both
+    a = primary.set_index(["series_id", "date"]).sort_index()
+    b = robust[robust["series_id"] == "10001"].set_index(["series_id", "date"]).sort_index()
+    pd.testing.assert_frame_equal(a, b)

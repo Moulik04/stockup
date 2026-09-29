@@ -18,6 +18,10 @@ def seasonal_naive(horizon: int) -> StatsForecastQuantileModel:
     return StatsForecastQuantileModel(
         _SeasonalNaive(season_length=SEASON_LENGTH, prediction_intervals=ci),
         name="SeasonalNaive",
+        # a season needs one full cycle of history; on a shorter window (Track B's 50-week
+        # calibration split against a 52-week season) it is the plain naive forecast instead
+        min_history=SEASON_LENGTH,
+        fallback=_SeasonalNaive(season_length=1, prediction_intervals=ci),
     )
 
 

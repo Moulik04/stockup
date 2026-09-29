@@ -49,6 +49,46 @@ rule, and is never used to choose the more favourable result. All use paired boo
    accuracy and cost rank models the same, the effect of the lead time and the margin (below), and
    how the bulk orders show up in the residuals and in the stockouts.
 
+### How each rule will be read, fixed before any model was run
+
+The rules above leave a few choices open. They are closed here, in advance, so that no verdict depends
+on a reading picked after seeing a number. "The cluster" is the seven non-naive models: MovingAverage,
+AutoETS, AutoTheta, LightGBM, CrostonClassic, CrostonSBA, TSB. SeasonalNaive is the eighth model and is
+in the ladder, the tables and finding 1's "every model", but not in the cluster.
+
+- **The default cell** is margin 27.5%, lead time 2 weeks, 95% target. Verdicts are taken there. The other
+  eleven cells of the 4 × 3 sensitivity grid are computed the same way and reported as a grid, and the
+  headline says in how many of the twelve the default verdict holds.
+- **Finding 1.** "Every model" is all eight. The saving is the mean over the eight models of cost per fold
+  at `S = s` minus cost per fold at `S = s + 2 × lead-time demand`. The spread is the highest minus the
+  lowest cost per fold among the seven cluster models under the shipped policy. Replicated if all eight
+  savings have 95% CIs that exclude zero and the saving exceeds the spread.
+- **Finding 2.** "The reorder point" is every cluster model: each must have held-out coverage within 3
+  points of 95%. Coverage is measured on fixed-origin windows of the lead time's length inside the test
+  folds, with the calibration from the window before fold 1, exactly as in `reports/production_model_*.md`
+  §4. The coverage figure used for the gap is the mean over the cluster; realised CSL and the undershoot
+  share are pooled over the cluster's cycles under `S > s`. The three conditions are as registered.
+- **Finding 3.** Read literally: all 21 pairs among the seven cluster models must have a CI containing
+  zero. With 21 comparisons even seven truly tied models would show about one CI excluding zero by
+  chance (5% of 21, less with the correlation between pairs), so a lone marginal exclusion is a weak
+  reason to call the cluster untied; the verdict is still mechanical, the count and intervals are
+  reported, and the six comparisons against LightGBM (Track A's design) are reported beside the 21.
+- **Finding 4.** The 4-week mean (the ladder's MovingAverage) against LightGBM, pooled over folds and
+  series, CI containing zero.
+- **The added stratum.** The 924 SKUs the robustness panel adds are broken out for the cost table and
+  the accuracy table only, descriptively.
+
+### Known consequences of the design, stated before the results
+
+- **The calibration is one window.** As in Track A it is the residuals of the lead-time window before
+  fold 1, here the last 2 weeks of the first 52, which are late November 2010: the autumn peak. That one
+  window sizes the buffer for all four folds, so a buffer set at peak volume is applied in summer. If the
+  buffer is too large in the quiet folds, that is a property of a single calibration window, and it is
+  the same design choice Track A made with a single, unseasonal window.
+- **SeasonalNaive on the calibration window.** It needs 52 weeks and that window has 50, so it falls back
+  to the plain naive forecast there (the fold forecasts use the 52-week season: fold 1 has exactly 52).
+  AutoETS and AutoTheta are non-seasonal in every fold (no window holds two annual cycles).
+
 ## Economics, fixed in advance
 
 Track A's economics are documented assumptions with sensitivity. Track B's are the same kind of thing:

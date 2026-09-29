@@ -69,7 +69,7 @@ time, unit price in pounds sterling, customer id (22.8% missing), country.
 
 `make data-b` downloads it (`scripts/download_online_retail.py`, standard library only) and runs the
 cleaning (`reorderpoint/online_retail.py`). The raw file is never committed. `REORDERPOINT_TRACK=b`
-selects the resulting panel. Grain is **weekly** (Monday to Sunday), because two years is too short
+selects the resulting panels (`TRACK_B_PANEL=primary|robustness`). Grain is **weekly** (Monday to Sunday), because two years is too short
 for monthly folds with annual seasonality. The design, economics and what will count as a replication
 of the Track A findings are in [`track_b.md`](track_b.md), registered before any model was run.
 

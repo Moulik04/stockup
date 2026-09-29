@@ -47,14 +47,33 @@ class StatsForecastQuantileModel:
     level=80 is the central 80% interval, i.e. P10/P90 for a symmetric predictive distribution.
     """
 
-    def __init__(self, model, name: str, n_jobs: int = -1):
+    def __init__(
+        self,
+        model,
+        name: str,
+        n_jobs: int = -1,
+        min_history: int | None = None,
+        fallback=None,
+    ):
+        """`min_history`/`fallback`: a model whose seasonal form needs at least `min_history`
+        observations per series falls back to `fallback` (its non-seasonal form) on a shorter
+        window, and `used_fallback` says so. Unused, and inert, where history is always enough
+        (Track A's 7-day season)."""
         self._model = model
+        self._fallback = fallback
+        self._min_history = min_history
+        self.used_fallback = False
         self._name = name
         self._n_jobs = n_jobs
         self._sf: StatsForecast | None = None
         self._train: pd.DataFrame | None = None
 
     def fit(self, train: pd.DataFrame) -> None:
+        self.used_fallback = bool(
+            self._fallback is not None
+            and self._min_history is not None
+            and train.groupby("series_id").size().min() < self._min_history
+        )
         self._train = train.rename(columns={"series_id": "unique_id", "date": "ds"})[
             ["unique_id", "ds", "y"]
         ]
@@ -62,7 +81,8 @@ class StatsForecastQuantileModel:
         # protocol that serving imports, and serving must not load statsforecast
         from statsforecast import StatsForecast
 
-        self._sf = StatsForecast(models=[self._model], freq=GRAIN.freq, n_jobs=self._n_jobs)
+        model = self._fallback if self.used_fallback else self._model
+        self._sf = StatsForecast(models=[model], freq=GRAIN.freq, n_jobs=self._n_jobs)
 
     def predict_quantiles(
         self, horizon: int, future_exog: pd.DataFrame | None = None

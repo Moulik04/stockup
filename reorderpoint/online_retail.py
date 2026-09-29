@@ -28,7 +28,8 @@ import pandas as pd
 from reorderpoint.config import REPO_ROOT
 
 TRACK_B_RAW_DIR = REPO_ROOT / "data" / "track_b" / "raw"
-TRACK_B_PROCESSED = REPO_ROOT / "data" / "track_b" / "processed" / "panel.parquet"
+PROCESSED_DIR = REPO_ROOT / "data" / "track_b" / "processed"
+PANELS = ("primary", "robustness")  # each in PROCESSED_DIR / <name> / panel.parquet
 RAW_XLSX = TRACK_B_RAW_DIR / "online_retail_II.xlsx"
 REPORTS_DIR = REPO_ROOT / "reports"
 
@@ -66,6 +67,11 @@ LAST_WEEK = FIRST_WEEK + pd.Timedelta(weeks=N_WEEKS - 1)  # 2011-11-28
 # nothing in the years being forecast, at the price of excluding every SKU launched after that.
 SELECTION_WEEKS = 52
 MIN_ACTIVE_WEEKS = 26
+# The robustness panel, added (before any model was run) alongside the primary: a strict superset,
+# every SKU that sold in at least this many of the first SELECTION_WEEKS weeks. Verdicts are the
+# primary panel's; this one is reported as agrees or disagrees (`docs/track_b.md`).
+ROBUSTNESS_MIN_ACTIVE_WEEKS = 13
+MIN_ACTIVE_BY_PANEL = {"primary": MIN_ACTIVE_WEEKS, "robustness": ROBUSTNESS_MIN_ACTIVE_WEEKS}
 
 LINE_COLUMNS = [
     "invoice",
@@ -300,21 +306,23 @@ def weekly_units(lines: pd.DataFrame, weeks: pd.DatetimeIndex) -> pd.DataFrame:
     return wide.reindex(weeks).fillna(0.0)
 
 
-def select_series(units: pd.DataFrame) -> pd.Index:
-    """SKUs that sold in at least MIN_ACTIVE_WEEKS of the first SELECTION_WEEKS weeks."""
+def select_series(units: pd.DataFrame, min_active_weeks: int = MIN_ACTIVE_WEEKS) -> pd.Index:
+    """SKUs that sold in at least `min_active_weeks` of the first SELECTION_WEEKS weeks."""
     active = (units.iloc[:SELECTION_WEEKS] > 0).sum()
-    return active[active >= MIN_ACTIVE_WEEKS].index
+    return active[active >= min_active_weeks].index
 
 
-def build_panel(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+def build_panel(
+    raw: pd.DataFrame, min_active_weeks: int = MIN_ACTIVE_WEEKS
+) -> tuple[pd.DataFrame, dict]:
     """(panel, report). The panel has one row per selected SKU per week, columns series_id, date
-    (the Monday), y (net units), price (USD unit value); the report is everything the cleaning and
-    selection documentation quotes."""
+    (the Monday), y (net units), price (USD unit value), month and weekofyear (calendar columns,
+    known in advance); the report is everything the cleaning and selection documentation quotes."""
     lines, log = clean_lines(raw)
     weeks = pd.date_range(FIRST_WEEK, periods=N_WEEKS, freq="W-MON")
     units = weekly_units(lines, weeks)
     prices = unit_values(lines, weeks)
-    keep = select_series(units)
+    keep = select_series(units, min_active_weeks)
 
     y = units[keep]
     long = (
@@ -329,6 +337,8 @@ def build_panel(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         .melt(id_vars="date", var_name="series_id", value_name="price")
     )
     panel = long.merge(price, on=["date", "series_id"], how="left")
+    panel["month"] = panel["date"].dt.month
+    panel["weekofyear"] = panel["date"].dt.isocalendar().week.astype(int)
     panel = panel.sort_values(["series_id", "date"]).reset_index(drop=True)
 
     total = units.sum(axis=1)
@@ -682,14 +692,26 @@ def cleaning_report(report: dict, panel: pd.DataFrame, plot_rel_path: str) -> st
     return "\n".join(out)
 
 
+def write_panels(raw: pd.DataFrame) -> tuple[dict[str, pd.DataFrame], dict]:
+    """Both panels from one cleaning pass, written to PROCESSED_DIR/<name>/panel.parquet. Returns
+    ({name: panel}, the primary panel's report)."""
+    panels, primary_report = {}, None
+    for name in PANELS:
+        panel, report = build_panel(raw, MIN_ACTIVE_BY_PANEL[name])
+        path = PROCESSED_DIR / name / "panel.parquet"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        panel.to_parquet(path, index=False)
+        print(f"Wrote {len(panel):,} rows, {panel['series_id'].nunique():,} series -> {path}")
+        panels[name] = panel
+        if name == "primary":
+            primary_report = report
+    return panels, primary_report
+
+
 def main() -> None:
     raw = load_raw()
-    panel, report = build_panel(raw)
-    TRACK_B_PROCESSED.parent.mkdir(parents=True, exist_ok=True)
-    panel.to_parquet(TRACK_B_PROCESSED, index=False)
-    print(
-        f"Wrote {len(panel):,} rows, {panel['series_id'].nunique():,} series -> {TRACK_B_PROCESSED}"
-    )
+    panels, report = write_panels(raw)
+    panel = panels["primary"]
     stamp = report["generated"]
     plot_rel = f"track_b_cleaning_files/seasonality_{stamp}.png"
     plot_seasonality(
