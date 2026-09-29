@@ -1,0 +1,6 @@
+# Copy to `.denylist.local` (gitignored) and list, one per line, every string that must never be
+# committed to this repo. Matched case-insensitively as a substring against staged file contents and
+# file names. `scripts/check_denylist.py` (a pre-commit hook) fails the commit on any match and never
+# echoes the matched string. With no `.denylist.local` the hook does nothing.
+#
+# example-string

@@ -9,6 +9,9 @@ __pycache__/
 REORDERPOINT_MASTER_PROMPT.md
 STOCKUP_V1_1_MASTER_PROMPT.md
 
+# local list of strings that must never be committed; read by the pre-commit denylist hook
+.denylist.local
+
 # data (never commit)
 data/track_a/*
 !data/track_a/.gitkeep

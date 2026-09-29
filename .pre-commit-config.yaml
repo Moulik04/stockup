@@ -18,3 +18,14 @@ repos:
       - id: check-yaml
       - id: check-added-large-files
         args: [--maxkb=1024]
+
+  # Fails on any staged file whose content or name matches a string in `.denylist.local` — a
+  # gitignored list of strings that must never be committed. No list, no-op.
+  - repo: local
+    hooks:
+      - id: denylist
+        name: denylist (local strings that must not be committed)
+        entry: python3 scripts/check_denylist.py
+        language: system
+        pass_filenames: false
+        always_run: true
