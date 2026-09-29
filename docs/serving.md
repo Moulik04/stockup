@@ -5,8 +5,9 @@ Phase 6: turns the pipeline into a running service, not just a report generator.
 ## Production model
 
 `make train` (`reorderpoint/train.py`) fits one LightGBM global model on the **entire** ingested
-panel (no held-out fold — Phase 3's backtest already established this model beats the baselines;
-this trains the same model on all available history) and persists it via `joblib` to
+panel (no held-out fold — this trains the model the backtests evaluated on all available
+history; under the shipped policy it beats SeasonalNaive and is cost-tied with the other
+statistical models, see `reports/production_model_*.md`) and persists it via `joblib` to
 `models/production/lightgbm.joblib` (gitignored, like all model artifacts). `serve.py` loads this
 once at first request (`functools.lru_cache`) rather than retraining per request or per container
 start — retraining LightGBM on every request would make the API too slow to be useful.

@@ -47,16 +47,22 @@ only the policy and the pricing changed underneath them:
 | Phase 4 original (`S = s`, 2%/day holding) | SeasonalNaive |
 | empirical-residual safety-stock sizing | LightGBM |
 | realistic holding (25%/yr) + lost-margin pricing | SeasonalNaive |
-| `S = s + 2 × lead-time demand`, `lot_multiple = 2` | LightGBM |
+| `S = s + 2 × lead-time demand`, `lot_multiple = 2` | AutoETS, tied with LightGBM (SeasonalNaive no longer) |
 
 **Why policy dominates: the forecasts behind every flip.** Every reversal in that table is a
 contest between SeasonalNaive and the rest, never a contest inside "the rest" — and that split is
 exactly what forecast divergence predicts. Pairwise Pearson correlation of the five models' P50
-forecasts ([`reports/model_divergence_2026-09-15.md`](reports/model_divergence_2026-09-15.md))
-puts MovingAverage, AutoETS, AutoTheta and LightGBM above 0.95 on every pair (0.934–0.979) — near-
-interchangeable, which is why the model comparison inside that cluster is small (the $99/fold
-LightGBM–SeasonalNaive gap under the repaired policy dwarfs anything measured between LightGBM and
-AutoETS/AutoTheta, which the CIs above call a tie). SeasonalNaive sits below the line against
+forecasts ([`reports/model_divergence_2026-09-29.md`](reports/model_divergence_2026-09-29.md))
+puts five of the six pairs among MovingAverage, AutoETS, AutoTheta and LightGBM above 0.95
+(0.953–0.979; MovingAverage–LightGBM, at 0.934, is the exception). That is mostly agreement about
+series *level*, not shape — correlated inside each series and averaged it is 0.35–0.76 where it can
+be computed at all, and the cluster members' forecasts differ from one another by 19–28% of mean
+demand — so the cluster is *similar*, not interchangeable. It is similar enough that the comparison
+inside it is small: the $99/fold LightGBM–SeasonalNaive gap under the repaired policy dwarfs
+anything measured between LightGBM and the rest of the cluster or the Croston family, all of which
+are cost-tied with it under the shipped policy
+([`reports/production_model_2026-09-29.md`](reports/production_model_2026-09-29.md)).
+SeasonalNaive sits below the line against
 every other model (0.655–0.704 pooled, and its forecasts differ from LightGBM's by 96% of their
 own mean demand — practically a different forecast, not a noisy copy). **That is the mechanism
 behind the table: the four reversals are not close calls resolved by a small policy nudge, they
@@ -67,9 +73,10 @@ differences, but ones that wash out next to the decision layer, not an illusion 
 begin with.
 
 Every flip was a decision-layer or parameter change — the sizing formula, the holding rate, or the
-ordering policy — never the models. **Under the policy actually shipped, LightGBM wins by $99 per
-fold [$34, $160], and that ranking is robust across the plausible holding-rate range (no crossover at
-15–30%/yr — see below).** But it is the fourth reversal in a row of the same shape, so the
+ordering policy — never the models. **Under the policy actually shipped, LightGBM beats SeasonalNaive by $99
+per fold [$34, $160], and that ordering is robust across the plausible holding-rate range (no
+crossover at 15–30%/yr — see below); AutoETS is nominally cheapest of all and is tied with
+LightGBM, as is every other model tested (see "Results").** But it is the fourth reversal in a row of the same shape, so the
 model-ranking conclusion should be trusted less than the policy-ranking one: three earlier "wins"
 already reversed once the decision layer under them changed, and this one is not exempt from that
 just because it is the most recent.
@@ -152,7 +159,7 @@ policy it can defend. That is the case for Track B (real costs), and for the das
 > up to `s + 2 × lead-time demand` instead of just `s`** (`/reorder`, `make score` and the
 > dashboard; it previously used the raw quantile-derived method Phase 4 showed loses, and the `S =
 > s` policy shown here to lose on cost — see "Where it fails"). LightGBM is the model served, and
-> under the repaired policy it is now also the cheapest. MinTrace reconciliation's item-level gain
+> under the repaired policy it beats SeasonalNaive and is cost-tied with every other model tested. MinTrace reconciliation's item-level gain
 > (Phase 5, run on AutoETS, not the production model) does not survive a bootstrap; a FastAPI
 > service, batch scoring, Docker image, CI,
 > monitoring, and a Streamlit dashboard sit on top of it (Phase 6) — see "Results" and
@@ -201,6 +208,7 @@ make breakeven  # solve the holding rate where LightGBM/SeasonalNaive cost the s
 make optimal-target # critical ratio + extended service-target grid; ranking at the cost-optimum
 make penalty    # ranking sensitivity to the lost-sale cost and the service target
 make croston    # Croston family (Classic/SBA/TSB), accuracy + shipped-policy cost by bucket
+make production-model # do LightGBM's quantiles feed sizing? cost vs LightGBM, run cost, coverage
 make data-full  # full M5, all 3 categories — needed for reconcile
 make reconcile  # hierarchical reconciliation experiment, writes reports/reconciliation_<date>.md
 make train      # fit + persist the production LightGBM model and its safety-stock calibration
@@ -235,15 +243,23 @@ forecasting approximately flat near-zero and the ranking were separating noise. 
 testing before presenting any ranking, so it was, with the pass/fail line set in advance:
 >0.95 pooled Pearson correlation on every pair of P50 forecast vectors would mean the comparison
 isn't measuring anything. Full analysis in
-[`reports/model_divergence_2026-09-15.md`](reports/model_divergence_2026-09-15.md).
+[`reports/model_divergence_2026-09-29.md`](reports/model_divergence_2026-09-29.md).
 
-**5 of 10 pairs clear 0.95 — and they are precisely the four RMSSE-cluster models.** Every pair
-below the line involves SeasonalNaive (0.655–0.704), which really is a different forecast. So the
-rankings are not noise, but two caveats travel with them:
+**5 of 10 pairs clear 0.95 — all five inside the four-model RMSSE cluster; the sixth cluster pair,
+MovingAverage–LightGBM, is 0.934.** Every pair involving SeasonalNaive is far below the line
+(0.655–0.704), and SeasonalNaive really is a different forecast. So the rankings are not noise, but
+three caveats travel with them, and the pooled figure overstates how alike the cluster is:
 
 - Most of that correlation is agreement about *series level*, not forecast shape. Demeaning within
-  each series×fold drops the clustered pairs to 0.75–0.91, and the measure is undefined for
-  MovingAverage, whose 28-day forecast is flat by construction.
+  each series×fold drops the clustered pairs to 0.75–0.91; correlating *inside* each series×fold
+  and averaging, so no series' scale can carry it, gives 0.35–0.76 (intermittent series
+  0.33–0.72, regular 0.57–0.94) — and only where both forecasts move at all: 48–91% of series×folds
+  for the pairs where it is computable, not at all for MovingAverage, whose 28-day forecast is flat
+  by construction (AutoETS is flat on half the series).
+- **Measured against demand, cluster members differ from one another by 19–28% of mean demand**
+  (intermittent series 21–31%, regular 15–24%) — the same measure that puts SeasonalNaive 96% off
+  LightGBM (110% intermittent, 76% regular). A real difference, roughly a quarter the size of
+  SeasonalNaive's, so "near-interchangeable" overstated it.
 - **Across the clustered pairs, the models disagree by only 18–27% of their own mean absolute
   error.** They differ by a fraction of what they are each wrong by — which is the regime where a
   reported 1–4% gap can be sampling noise. Read the small gaps in the tables below with that in
@@ -642,7 +658,7 @@ guesses.
 | Hierarchical reconciliation: none → MinTrace | same base | item level **−0.12%, 95% CI [−0.24%, +0.07%]** — crosses zero; the other levels have 2–14 nodes and cannot be bootstrapped | **Not distinguishable from no effect** at the only level that can be tested |
 | Model family: per-series statistical (AutoETS/AutoTheta) → global LightGBM | best baseline MASE 1.529 (AutoTheta), all baselines miss the coverage bar by 12-22 points | LightGBM MASE 1.587 (only 4% worse) but the *only* model clearing the coverage bar (81.2%) | Global model wins on the metric that actually matters for the decision layer, not the one that looks best in isolation |
 | Architecture: global LightGBM (featured) → NBEATS (univariate deep) | LightGBM MASE 1.587, $14,543/fold | NBEATS MASE 1.108 (best in the project), $17,209/fold (worst at the decision layer) | The sharpest accuracy/cost split in the project — see Phase 7 above |
-| Ordering policy: `S = s` → `S = s + 2 × lead-time demand` | $1,569/fold pooled, 82.8% realised CSL, SeasonalNaive cheapest, LightGBM $178 costlier | $453/fold pooled (−71%), 91.9% realised CSL, LightGBM cheapest by $99, no holding-rate crossover in the plausible range | The single largest effect measured in this project, and it reverses the model ranking — see "The finding" |
+| Ordering policy: `S = s` → `S = s + 2 × lead-time demand` | $1,569/fold pooled, 82.8% realised CSL, SeasonalNaive cheapest, LightGBM $178 costlier | $453/fold pooled (−71%), 91.9% realised CSL, AutoETS nominally cheapest and tied with LightGBM, which is $99 cheaper than SeasonalNaive, no holding-rate crossover in the plausible range | The single largest effect measured in this project, and it reverses the model ranking — see "The finding" |
 
 ## Where it fails
 
@@ -675,8 +691,19 @@ guesses.
   findings about the same models on the same panel; neither is "the" answer, because the answer is
   a function of the policy. LightGBM's lead over AutoTheta is not distinguishable at any rate under
   `S = s`; NBEATS is worse than SeasonalNaive at every rate tested (point estimates — no per-series
-  data to bootstrap, and not re-run under the new policy). LightGBM stays in production for its
-  calibrated intervals and, under the current default policy, for its cost too. Every figure is
+  data to bootstrap, and not re-run under the new policy). LightGBM is still what is served, but
+  the original reason, its calibrated intervals, no longer supports the *reorder decision*: its
+  native P10/P90 feed no part of it (sizing is the P50 lead-time mean plus a buffer from pooled
+  empirical residuals; scrambling every model's P10/P90 leaves reorder points, order-up-to levels
+  and cost identical to the last bit). On cost it is tied with every RMSSE-cluster member and the
+  Croston family under the shipped policy — all six paired-bootstrap CIs contain zero, pooled and by
+  intermittency bucket — and beats only SeasonalNaive
+  ([`reports/production_model_2026-09-29.md`](reports/production_model_2026-09-29.md)). What its
+  intervals are still used for is display (`/forecast`, the dashboard fan chart), where its 81%
+  P10–P90 coverage against 59–64% for the alternatives is the one remaining difference. On
+  operational grounds alone (seconds to fit, no feature or forward-exog pipeline, no 110 MB
+  artifact, no leakage surface) a Croston-family model would be simpler to serve; whether to switch
+  is an open decision, not one made here. Every figure is
   conditional on the two cost parameters (holding rate: named source, not retail-specific; lost
   margin: Walmart U.S., a lower bound), the service target, and the ordering policy — see "The
   finding".
