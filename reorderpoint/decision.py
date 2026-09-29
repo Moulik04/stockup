@@ -15,6 +15,7 @@ from scipy.stats import norm
 
 from reorderpoint import backtest as bt
 from reorderpoint.config import CostParams, describe_holding_rate, load_config
+from reorderpoint.grain import GRAIN
 
 Z80 = norm.ppf(0.9)  # P10/P90 is the central 80% interval everywhere in this project
 
@@ -429,7 +430,7 @@ def evaluate_fold_cost_policies(
     """
     train = panel[panel["date"] <= fold.train_end]
     test = panel[(panel["date"] >= fold.test_start) & (panel["date"] <= fold.test_end)]
-    horizon = (fold.test_end - fold.test_start).days + 1
+    horizon = GRAIN.periods_in(fold.test_start, fold.test_end)
 
     model = bt.MODEL_FACTORIES[model_name](horizon)
     model.fit(train)
@@ -626,7 +627,7 @@ def _bootstrap_lead_time_std(
     per model up front, not one per fold (see docs/decision.md).
     """
     train = panel[panel["date"] <= first_fold.train_end]
-    cutoff = train["date"].max() - pd.Timedelta(days=costs.lead_time_days - 1)
+    cutoff = train["date"].max() - GRAIN.period * (costs.lead_time_days - 1)
     calib_train = train[train["date"] < cutoff]
     calib_test = train[train["date"] >= cutoff]
 

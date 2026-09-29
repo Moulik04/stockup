@@ -36,6 +36,7 @@ from reorderpoint import decision as dec
 from reorderpoint import divergence as dv
 from reorderpoint import safety_stock as ss
 from reorderpoint.config import CostParams, load_config
+from reorderpoint.grain import GRAIN
 from reorderpoint.metrics import coverage, pinball_loss
 
 NEW_MODELS = ("CrostonClassic", "CrostonSBA", "TSB")
@@ -63,7 +64,7 @@ def extend_forecasts(eval_panel: pd.DataFrame) -> pd.DataFrame:
         test = eval_panel[
             (eval_panel["date"] >= fold.test_start) & (eval_panel["date"] <= fold.test_end)
         ]
-        horizon = (fold.test_end - fold.test_start).days + 1
+        horizon = GRAIN.periods_in(fold.test_start, fold.test_end)
         zero_rates = bt._intermittency(train).rename("zero_rate")
         for model_name in missing:
             model = bt.MODEL_FACTORIES[model_name](horizon)
@@ -96,7 +97,7 @@ def extend_calibration(eval_panel: pd.DataFrame, costs: CostParams) -> pd.DataFr
 
     first_fold = bt.make_folds(eval_panel)[0]
     train = eval_panel[eval_panel["date"] <= first_fold.train_end]
-    cutoff = train["date"].max() - pd.Timedelta(days=costs.lead_time_days - 1)
+    cutoff = train["date"].max() - GRAIN.period * (costs.lead_time_days - 1)
     calib_train = train[train["date"] < cutoff]
     calib_test = train[train["date"] >= cutoff]
 

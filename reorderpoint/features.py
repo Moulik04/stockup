@@ -12,9 +12,14 @@ from __future__ import annotations
 
 import pandas as pd
 
-LAGS = (1, 7, 14, 28)
-ROLLING_WINDOWS = (7, 28)
-PRICE_CHANGE_LAG = 7
+from reorderpoint.grain import GRAIN
+
+# Lags and windows in periods of the active grain: (1, 7, 14, 28) / (7, 28) / 7 days for Track A,
+# (1, 2, 4, 13) / (4, 13) / 4 weeks for Track B (reorderpoint/grain.py).
+LAGS = GRAIN.lags
+ROLLING_WINDOWS = GRAIN.rolling_windows
+PRICE_CHANGE_LAG = GRAIN.price_change_lag
+PRICE_CHANGE_COLUMN = f"price_change_{PRICE_CHANGE_LAG}"  # price_change_7 on Track A
 
 CATEGORICAL_COLUMNS = [
     "item_id",
@@ -27,7 +32,7 @@ CATEGORICAL_COLUMNS = [
     "event_name_2",
     "event_type_2",
 ]
-PASSTHROUGH_NUMERIC_COLUMNS = ["price", "wday", "month", "year", "snap"]
+PASSTHROUGH_NUMERIC_COLUMNS = ["price", "wday", "month", "year", "snap", "weekofyear"]
 
 
 def build_features(panel: pd.DataFrame) -> pd.DataFrame:
@@ -51,7 +56,7 @@ def build_features(panel: pd.DataFrame) -> pd.DataFrame:
     df = df.drop(columns=["_shifted_y"])
 
     if "price" in df.columns:
-        df["price_change_7"] = df.groupby("series_id", sort=False)["price"].transform(
+        df[PRICE_CHANGE_COLUMN] = df.groupby("series_id", sort=False)["price"].transform(
             lambda s: s / s.shift(PRICE_CHANGE_LAG) - 1
         )
 
@@ -65,7 +70,7 @@ def feature_columns(df: pd.DataFrame) -> list[str]:
         + [f"roll_mean_{w}" for w in ROLLING_WINDOWS]
         + [f"roll_std_{w}" for w in ROLLING_WINDOWS]
         + [f"roll_zero_rate_{w}" for w in ROLLING_WINDOWS]
-        + (["price_change_7"] if "price" in df.columns else [])
+        + ([PRICE_CHANGE_COLUMN] if "price" in df.columns else [])
     )
     passthrough = [c for c in PASSTHROUGH_NUMERIC_COLUMNS + CATEGORICAL_COLUMNS if c in df.columns]
     return generated + passthrough

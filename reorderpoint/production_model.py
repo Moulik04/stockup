@@ -45,6 +45,7 @@ from reorderpoint import divergence as dv
 from reorderpoint import safety_stock as ss
 from reorderpoint.calibration import INTERVAL_LEVEL, SafetyStockCalibration
 from reorderpoint.config import CostParams, daily_to_annual, load_config
+from reorderpoint.grain import GRAIN
 from reorderpoint.models.trailing_mean import TrailingMeanModel
 
 PRODUCTION = "LightGBM"  # the model this report's comparisons are made against
@@ -144,7 +145,7 @@ def time_models(eval_panel: pd.DataFrame, models: list[str]) -> pd.DataFrame:
     test = eval_panel[
         (eval_panel["date"] >= fold.test_start) & (eval_panel["date"] <= fold.test_end)
     ]
-    horizon = (fold.test_end - fold.test_start).days + 1
+    horizon = GRAIN.periods_in(fold.test_start, fold.test_end)
     factories = {**bt.MODEL_FACTORIES, SERVED: lambda _horizon: TrailingMeanModel()}
     rows = []
     for name in models:
@@ -243,7 +244,7 @@ def equivalence_to_ladder(eval_panel: pd.DataFrame) -> dict:
     worst, rows_ok = 0.0, True
     for fold in bt.make_folds(eval_panel):
         train = eval_panel[eval_panel["date"] <= fold.train_end]
-        horizon = (fold.test_end - fold.test_start).days + 1
+        horizon = GRAIN.periods_in(fold.test_start, fold.test_end)
         ref = bt.MODEL_FACTORIES["MovingAverage"](horizon)
         ref.fit(train)
         served = TrailingMeanModel()

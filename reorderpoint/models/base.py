@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Protocol
 import numpy as np
 import pandas as pd
 
+from reorderpoint.grain import GRAIN
+
 if TYPE_CHECKING:
     from statsforecast import StatsForecast
 
@@ -60,7 +62,7 @@ class StatsForecastQuantileModel:
         # protocol that serving imports, and serving must not load statsforecast
         from statsforecast import StatsForecast
 
-        self._sf = StatsForecast(models=[self._model], freq="D", n_jobs=self._n_jobs)
+        self._sf = StatsForecast(models=[self._model], freq=GRAIN.freq, n_jobs=self._n_jobs)
 
     def predict_quantiles(
         self, horizon: int, future_exog: pd.DataFrame | None = None

@@ -41,6 +41,7 @@ from reorderpoint import decision as dec
 from reorderpoint import safety_stock as ss
 from reorderpoint.config import REPO_ROOT
 from reorderpoint.exog import future_exog_from_trailing_window
+from reorderpoint.grain import GRAIN
 from reorderpoint.models.base import QuantileForecaster
 
 CALIBRATION_PATH = REPO_ROOT / "models" / "production" / "safety_stock_calibration.joblib"
@@ -157,7 +158,7 @@ def fit_calibration(
 ) -> SafetyStockCalibration:
     """Residuals from a held-out final lead-time window — see the module docstring."""
     last = panel["date"].max()
-    cutoff = last - pd.Timedelta(days=lead_time_days - 1)
+    cutoff = last - GRAIN.period * (lead_time_days - 1)
     calib_train = panel[panel["date"] < cutoff]
     calib_test = panel[panel["date"] >= cutoff]
 

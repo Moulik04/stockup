@@ -25,6 +25,8 @@ from neuralforecast import NeuralForecast
 from neuralforecast.losses.pytorch import MQLoss
 from neuralforecast.models import NBEATS as _NBEATS
 
+from reorderpoint.grain import GRAIN
+
 MODEL_NAME = "NBEATS"
 
 
@@ -45,7 +47,7 @@ class NBEATSModel:
             devices=1,
             precision="16-mixed",
         )
-        self._nf = NeuralForecast(models=[model], freq="D")
+        self._nf = NeuralForecast(models=[model], freq=GRAIN.freq)
         self._nf.fit(df=df)
 
     def predict_quantiles(

@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import pandas as pd
 
-WINDOW_SIZE = 28  # 4-week moving average, as `naive.WINDOW_SIZE`
+from reorderpoint.grain import GRAIN
+
+WINDOW_SIZE = GRAIN.ma_window  # as `naive.WINDOW_SIZE`: 28 days, or 4 weeks on Track B
 
 
 class TrailingMeanModel:
@@ -42,7 +44,7 @@ class TrailingMeanModel:
         if self._level is None or self._last_date is None:
             raise RuntimeError("call fit() before predict_quantiles()")
         ids = self._level.index
-        offsets = pd.to_timedelta(range(1, horizon + 1), unit="D")
+        offsets = GRAIN.period * pd.Index(range(1, horizon + 1))
         out = pd.DataFrame(
             {
                 "series_id": ids.repeat(horizon),

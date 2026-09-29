@@ -6,9 +6,12 @@ from statsforecast.models import AutoETS as _AutoETS
 from statsforecast.models import AutoTheta as _AutoTheta
 from statsforecast.utils import ConformalIntervals
 
+from reorderpoint.grain import GRAIN
 from reorderpoint.models.base import StatsForecastQuantileModel
 
-SEASON_LENGTH = 7  # weekly seasonality in daily M5 data
+# 7 (weekly cycle) daily. Weekly it is 1, non-seasonal: no training window holds the two full annual
+# cycles a period-52 model needs, so this is the registered fallback (reorderpoint/grain.py).
+SEASON_LENGTH = GRAIN.model_season
 
 
 def auto_ets(horizon: int) -> StatsForecastQuantileModel:

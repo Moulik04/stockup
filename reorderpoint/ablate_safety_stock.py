@@ -30,6 +30,7 @@ from reorderpoint import decision as dec
 from reorderpoint import divergence as dv
 from reorderpoint import safety_stock as ss
 from reorderpoint.config import CostParams, load_config
+from reorderpoint.grain import GRAIN
 
 CALIB_PATH = bt.PANEL_PATH.parent / "calibration_residuals.parquet"
 CELL_RESULTS_PATH = bt.PANEL_PATH.parent / "safety_stock_cells.parquet"
@@ -65,7 +66,7 @@ def calibration_residuals(panel: pd.DataFrame, costs: CostParams) -> pd.DataFram
     eval_panel = bt.sample_series(panel, bt.N_SERIES_SAMPLE)
     first_fold = bt.make_folds(eval_panel)[0]
     train = eval_panel[eval_panel["date"] <= first_fold.train_end]
-    cutoff = train["date"].max() - pd.Timedelta(days=costs.lead_time_days - 1)
+    cutoff = train["date"].max() - GRAIN.period * (costs.lead_time_days - 1)
     calib_train = train[train["date"] < cutoff]
     calib_test = train[train["date"] >= cutoff]
 

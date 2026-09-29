@@ -6,10 +6,11 @@ from statsforecast.models import SeasonalNaive as _SeasonalNaive
 from statsforecast.models import WindowAverage as _WindowAverage
 from statsforecast.utils import ConformalIntervals
 
+from reorderpoint.grain import GRAIN
 from reorderpoint.models.base import StatsForecastQuantileModel
 
-SEASON_LENGTH = 7  # weekly seasonality in daily M5 data
-WINDOW_SIZE = 28  # 4-week moving average
+SEASON_LENGTH = GRAIN.naive_season  # 7 days (weekly cycle) daily; 52 weeks (annual) weekly
+WINDOW_SIZE = GRAIN.ma_window  # 28 days daily (4 weeks); 4 weeks weekly
 
 
 def seasonal_naive(horizon: int) -> StatsForecastQuantileModel:

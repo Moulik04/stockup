@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from reorderpoint.features import build_features, categorical_columns, feature_columns
+from reorderpoint.grain import GRAIN
 
 LGB_PARAMS = dict(
     n_estimators=300,
@@ -30,7 +31,7 @@ LGB_PARAMS = dict(
 
 # Only the trailing window needed to recompute lag_28 / roll_28 at each recursive step —
 # keeps every recursive build_features() call cheap regardless of total training history length.
-MAX_HISTORY_DAYS = 90
+MAX_HISTORY_DAYS = GRAIN.lgb_history  # rows, i.e. periods: 90 days, or 30 weeks
 
 
 class LightGBMGlobalModel:

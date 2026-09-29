@@ -8,6 +8,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from reorderpoint.grain import for_track
+
 load_dotenv()
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -70,13 +72,17 @@ def describe_holding_rate(daily_rate: float) -> str:
 
 @dataclass(frozen=True)
 class CostParams:
-    # Fraction of unit cost charged per DAY on hand (accrued daily in decision.simulate_series).
-    # Default is DEFAULT_ANNUAL_HOLDING_RATE / 365. Until 2026-09-20 it was 0.02 (~730%/yr) — see
-    # .env.example and reports/holding_breakeven_*.md.
+    # Fraction of unit cost charged per PERIOD on hand (accrued each period in
+    # decision.simulate_series): a day for Track A, a week for Track B.
+    # Default is DEFAULT_ANNUAL_HOLDING_RATE / periods per year (365 or 52). Until 2026-09-20 it was
+    # 0.02 (~730%/yr) — see .env.example and reports/holding_breakeven_*.md.
     holding_cost_rate: float
     # Flat $/unit lost sale. Used only when `gross_margin` is None — the pre-2026-09-20 model, kept
     # so old runs can be reproduced and re-priced; not sourced (see docs/decision.md).
     stockout_penalty_per_unit: float
+    # In periods of the track's grain: days for Track A, weeks for Track B (reorderpoint/grain.py).
+    # The name predates the second track and is kept for its many callers; `lead_time_periods` is
+    # the accurate spelling for new code.
     lead_time_days: int
     service_level_target: float
     # Unit economics. When set: a lost sale costs `gross_margin x price` and stock is valued at
@@ -85,6 +91,10 @@ class CostParams:
     # Order-up-to level above the reorder point, as a multiple of expected lead-time demand:
     # S = s + lot_multiple x E[lead-time demand]. 0 is the original S = s. See order_up_to.py.
     lot_multiple: float = 0.0
+
+    @property
+    def lead_time_periods(self) -> int:
+        return self.lead_time_days
 
     def unit_cost(self, price):
         """Per-unit value the holding rate applies to."""
@@ -113,6 +123,7 @@ def load_config() -> Config:
     track = os.environ.get("REORDERPOINT_TRACK", "a").lower()
     if track not in {"a", "b"}:
         raise ValueError(f"REORDERPOINT_TRACK must be 'a' or 'b', got {track!r}")
+    grain = for_track(track)
 
     flat_penalty = os.environ.get("STOCKOUT_PENALTY_PER_UNIT")
     margin = os.environ.get("GROSS_MARGIN")
@@ -128,10 +139,16 @@ def load_config() -> Config:
         track=track,
         costs=CostParams(
             holding_cost_rate=float(
-                os.environ.get("HOLDING_COST_RATE", annual_to_daily(DEFAULT_ANNUAL_HOLDING_RATE))
+                os.environ.get(
+                    "HOLDING_COST_RATE", grain.annual_to_period(DEFAULT_ANNUAL_HOLDING_RATE)
+                )
             ),
             stockout_penalty_per_unit=float(flat_penalty if flat_penalty is not None else 5.00),
-            lead_time_days=int(os.environ.get("LEAD_TIME_DAYS", 7)),
+            lead_time_days=int(
+                os.environ.get("LEAD_TIME_PERIODS")
+                or os.environ.get("LEAD_TIME_DAYS")
+                or grain.default_lead_time
+            ),
             service_level_target=float(os.environ.get("SERVICE_LEVEL_TARGET", 0.95)),
             gross_margin=gross_margin,
             lot_multiple=float(os.environ.get("LOT_MULTIPLE", DEFAULT_LOT_MULTIPLE)),

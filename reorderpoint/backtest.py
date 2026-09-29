@@ -10,27 +10,48 @@ from __future__ import annotations
 
 import datetime as dt
 import importlib
+import os
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from reorderpoint.config import REPO_ROOT
+from reorderpoint.grain import GRAIN
 from reorderpoint.metrics import coverage, pinball_loss, weighted_average
 
-PANEL_PATH = REPO_ROOT / "data" / "track_a" / "processed" / "panel.parquet"
+TRACK_B_PANELS = ("primary", "robustness")
+
+
+def _panel_path() -> Path:
+    """Track A's panel, or one of Track B's two (`TRACK_B_PANEL=primary|robustness`, default
+    primary). Each Track B panel has its own directory so the caches written beside it (forecasts,
+    calibration residuals, decision detail) cannot collide."""
+    if GRAIN.name == "day":
+        return REPO_ROOT / "data" / "track_a" / "processed" / "panel.parquet"
+    name = os.environ.get("TRACK_B_PANEL", "primary")
+    if name not in TRACK_B_PANELS:
+        raise ValueError(f"TRACK_B_PANEL must be one of {TRACK_B_PANELS}, got {name!r}")
+    return REPO_ROOT / "data" / "track_b" / "processed" / name / "panel.parquet"
+
+
+PANEL_PATH = _panel_path()
 REPORTS_DIR = REPO_ROOT / "reports"
 
-HORIZON = 28
-N_FOLDS = 4
-SEASON_LENGTH = 7
+# All in periods of the active grain (reorderpoint/grain.py): Track A's daily values are the ones
+# that used to be written here, 28 / 4 / 7.
+PERIOD = GRAIN.period
+HORIZON = GRAIN.horizon
+N_FOLDS = GRAIN.n_folds
+SEASON_LENGTH = GRAIN.mase_lag  # the lag MASE/RMSSE are scaled by, not the models' season
 
 # AutoETS/AutoTheta cost ~1s/series each even with 8-way parallelism (measured: 50 series in
 # ~20-40s per model, 300 series in ~330s for all 4 models combined) — full 5,650-series HOBBIES
 # panel x 4 folds would take hours. Backtest evaluation uses a fixed random subsample so
 # `make backtest` stays a local, iterable command. The full panel is still used as-is by
 # Phase 3's global LightGBM, which doesn't have this per-series refit cost.
-N_SERIES_SAMPLE = 400
+N_SERIES_SAMPLE = GRAIN.n_series_sample  # None: every series (Track B)
 SAMPLE_SEED = 0
 
 
@@ -75,29 +96,29 @@ class Fold:
 
 
 def make_folds(panel: pd.DataFrame, horizon: int = HORIZON, n_folds: int = N_FOLDS) -> list[Fold]:
-    """Rolling origin, expanding training window, non-overlapping H-day test blocks, gap=0."""
+    """Rolling origin, expanding training window, non-overlapping H-period test blocks, gap=0."""
     last_date = panel["date"].max()
     folds = []
     for i in range(n_folds):
-        test_end = last_date - pd.Timedelta(days=horizon * i)
-        test_start = test_end - pd.Timedelta(days=horizon - 1)
-        train_end = test_start - pd.Timedelta(days=1)
+        test_end = last_date - PERIOD * (horizon * i)
+        test_start = test_end - PERIOD * (horizon - 1)
+        train_end = test_start - PERIOD
         folds.append(
             Fold(index=n_folds - i, train_end=train_end, test_start=test_start, test_end=test_end)
         )
     return list(reversed(folds))
 
 
-def sample_series(panel: pd.DataFrame, n: int, seed: int = SAMPLE_SEED) -> pd.DataFrame:
+def sample_series(panel: pd.DataFrame, n: int | None, seed: int = SAMPLE_SEED) -> pd.DataFrame:
     all_ids = panel["series_id"].unique()
-    if n >= len(all_ids):
+    if n is None or n >= len(all_ids):
         return panel
     rng = np.random.default_rng(seed)
     chosen = rng.choice(all_ids, size=n, replace=False)
     return panel[panel["series_id"].isin(chosen)]
 
 
-def load_eval_panel(n: int = N_SERIES_SAMPLE, seed: int = SAMPLE_SEED) -> pd.DataFrame:
+def load_eval_panel(n: int | None = N_SERIES_SAMPLE, seed: int = SAMPLE_SEED) -> pd.DataFrame:
     """The same `n`-series sample `sample_series` picks, without materialising the full panel.
 
     `sample_series(panel, n)` needs the whole ~11M-row HOBBIES panel in memory only to keep 400
@@ -106,7 +127,7 @@ def load_eval_panel(n: int = N_SERIES_SAMPLE, seed: int = SAMPLE_SEED) -> pd.Dat
     a small machine. `sample_series` on the result is a no-op, since it already holds n series.
     """
     ids = pd.read_parquet(PANEL_PATH, columns=["series_id"])["series_id"].unique()
-    if n >= len(ids):
+    if n is None or n >= len(ids):
         panel = pd.read_parquet(PANEL_PATH)
     else:
         chosen = np.random.default_rng(seed).choice(ids, size=n, replace=False)
@@ -130,8 +151,8 @@ def _in_sample_scales(train: pd.DataFrame, season_length: int) -> pd.DataFrame:
 
 
 def _fold_revenue_weights(train: pd.DataFrame, horizon: int) -> pd.Series:
-    """Each series' weight: its revenue (y * price) over the last `horizon` training days."""
-    cutoff = train["date"].max() - pd.Timedelta(days=horizon - 1)
+    """Each series' weight: its revenue (y * price) over the last `horizon` training periods."""
+    cutoff = train["date"].max() - PERIOD * (horizon - 1)
     recent = train[train["date"] >= cutoff]
     revenue = recent["y"] * recent["price"].fillna(0)
     return revenue.groupby(recent["series_id"]).sum()
@@ -152,7 +173,7 @@ def evaluate_fold(
 ) -> tuple[dict, pd.DataFrame]:
     train = panel[panel["date"] <= fold.train_end]
     test = panel[(panel["date"] >= fold.test_start) & (panel["date"] <= fold.test_end)]
-    horizon = (fold.test_end - fold.test_start).days + 1
+    horizon = GRAIN.periods_in(fold.test_start, fold.test_end)
 
     model = MODEL_FACTORIES[model_name](horizon)
     model.fit(train)

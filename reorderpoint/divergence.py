@@ -19,6 +19,7 @@ import pandas as pd
 
 from reorderpoint import backtest as bt
 from reorderpoint.config import load_config
+from reorderpoint.grain import GRAIN
 
 FORECASTS_PATH = bt.PANEL_PATH.parent / "backtest_forecasts.parquet"
 CLOSE_THRESHOLD = 0.05
@@ -42,7 +43,7 @@ def collect_forecasts(panel: pd.DataFrame) -> pd.DataFrame:
         test = eval_panel[
             (eval_panel["date"] >= fold.test_start) & (eval_panel["date"] <= fold.test_end)
         ]
-        horizon = (fold.test_end - fold.test_start).days + 1
+        horizon = GRAIN.periods_in(fold.test_start, fold.test_end)
         zero_rates = bt._intermittency(train).rename("zero_rate")
 
         for model_name, factory in bt.MODEL_FACTORIES.items():
