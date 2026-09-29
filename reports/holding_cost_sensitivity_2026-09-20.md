@@ -5,8 +5,8 @@ Every cost in the project prices holding at `holding_cost_rate` per unit-cost pe
 ## 1. Where the value came from, and what it was meant to be
 
 - **Origin.** `HOLDING_COST_RATE=0.02` is a config default and `.env.example` line from the
-  initial commit (`a9db6ac`), labelled *"Track A defaults are illustrative, not real business
-  numbers."* No DECISIONS entry explains it.
+  initial commit (pre-rewrite; that commit was later removed), labelled *"Track A defaults are
+  illustrative, not real business numbers."* No DECISIONS entry explains it.
 - **Stated unit: none.** The master prompt lists "holding cost rate, stockout penalty (all in
   config, USD)" — a rate, with no period. `docs/decision.md` documents the *mechanism* ("end-of-day
   on-hand accrues `holding_cost_rate * unit_cost * on_hand`"), which is per day, but never says what

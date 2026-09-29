@@ -954,14 +954,26 @@ been present since early commits, ran a full `git filter-repo --replace-text` hi
 touch those) and force-pushed. MJ explicitly chose the full-history-rewrite option over a
 forward-fix-only option when asked.
 
-**Verification:** independent fresh clone from GitHub post-push showed zero remaining occurrences
-of any scrubbed string, across all history, not just HEAD. Confirmed the `v1.0.0`/`v1.0.1` GitHub
-Releases survived (they track by tag name, and tags were rewritten + re-pushed), and CI stayed
-green on the rewritten history.
+**Verification:** an independent fresh clone from GitHub post-push showed zero occurrences of any
+scrubbed string in any reachable commit, not just HEAD — i.e. the strings were **removed from
+repository history**. That is all it shows: it does not show the data is gone. See the caveat
+below and the 2026-09-29 entry. Confirmed the `v1.0.0`/`v1.0.1` GitHub Releases survived (they
+track by tag name, and tags were rewritten + re-pushed), and CI stayed green on the rewritten
+history.
 
 **Consequence:** anyone with a pre-rewrite clone/fork has diverging history now (a hard reset, not
 a merge, would be needed to reconcile) — acceptable since this is a solo portfolio repo with no
 other contributors or forks at the time of the rewrite.
+
+**Caveat (added 2026-09-29): removed from history is not erased.** A force-push moves the branch
+and tag refs; the old commits become unreferenced but GitHub keeps them reachable by SHA (API and
+web URL) until it garbage-collects them, on a schedule GitHub does not publish. Any clone made
+before the rewrite still holds the old history in full, and so would any fork (none exist: checked
+2026-09-29, 0 forks, 0 network members, 0 PRs/issues). Checked directly: a pre-rewrite commit SHA
+recovered from a stale local ref still resolved through the GitHub API on 2026-09-29, well after
+the rewrite. The only full remedy is GitHub Support's sensitive-data removal request (purge of
+cached views and unreferenced objects); the forward-looking control is the pre-commit denylist
+hook (2026-09-29 entry).
 
 ## 2026-09-11 — Python 3.12 → 3.13
 
@@ -1305,8 +1317,9 @@ every result that trades holding against stockout. Settling it was made the prec
 anything else, including adopting the finer safety-stock scheme.
 
 **Provenance (what could and could not be recovered).** `HOLDING_COST_RATE=0.02` is a config
-default and `.env.example` line from the initial commit (`a9db6ac`), labelled "illustrative, not
-real business numbers". The master prompt says only "holding cost rate ... (all in config, USD)" —
+default and `.env.example` line from the initial commit (pre-rewrite; that commit was later
+removed), labelled "illustrative, not real business
+numbers". The master prompt says only "holding cost rate ... (all in config, USD)" —
 a rate with no period. No DECISIONS entry explains it. The one unit-bearing statement is the
 simulation, which accrues it every simulated day (`docs/decision.md` documents that mechanism, not
 the intent). **The intended unit cannot be recovered from the repo or its history.** Two readings
@@ -1948,3 +1961,148 @@ and `black --check` clean on every new/changed file.
 entry not yet executed at time of writing — queued immediately after, pending MJ's confirmation
 already given. Everything else (Croston, the synthesis paragraph, the MinTrace fix, the master-
 prompt genericization and gitignoring) is complete and verified.
+
+**Addendum (2026-09-29):** the rewrite and force-push were executed, and a fresh-clone check of
+the result was clean — the strings are **removed from repository history**, with the same caveat as
+the 2026-09-11 entry: unreferenced old commits stay reachable by SHA on GitHub until GC, and prior
+clones/forks keep the old history. The two re-leaks that followed the first scrub — files the
+first pass never touched, and this file quoting the scrubbed strings verbatim in its own audit
+trail — are the class the denylist hook exists to stop.
+
+## 2026-09-29 — v1.1 close-out II: privacy residuals, cluster claim checked within series, production model re-examined
+
+**Context:** MJ's five-item brief before tagging v1.1: privacy residuals, the >0.95 cluster within
+series, the LightGBM "calibrated intervals" justification, backing this file up, and the tag.
+
+**1. Privacy residuals.**
+- *Forks:* none. `forks_count` 0, `network_count` 0, 0 PRs, 0 issues; refs are `main`, `v1.0.0`,
+  `v1.0.1`. Nothing to ask anyone to delete.
+- *Old history is still reachable.* Recovered a pre-rewrite commit SHA from a stale local ref
+  (`.git/refs/remotes/origin/main 2`, a Finder duplicate of the remote-tracking ref, which also
+  broke `git fetch` because its object no longer exists locally — moved aside, not deleted) and
+  asked the GitHub API for it: it still resolves. That is the concrete case for the caveat now
+  written into the 2026-09-11 and 2026-09-23 entries ("removed from repository history", not
+  "gone"). MJ can check whether it matters by fetching the two files the second pass scrubbed at
+  that SHA and grepping them against `.denylist.local`. Full remedy is GitHub Support's
+  sensitive-data removal request; not filed, MJ's call.
+- *Denylist hook (the structural fix for the two re-leaks).* `scripts/check_denylist.py`, wired as
+  a `local` hook in `.pre-commit-config.yaml`. Reads `.denylist.local` (gitignored — it holds the
+  strings it protects; `.denylist.local.example` is the tracked template) and fails the commit if
+  any staged file's *staged blob* or path contains an entry, case-insensitive substring. No list,
+  empty list, or comment-only list: no-op, so a fresh clone and CI are never blocked. It reports
+  file, line and the entry's line number in the denylist, never the string. Six unit tests
+  (`tests/test_denylist_hook.py`) plus a manual end-to-end run through pre-commit with a canary
+  string: blocked with a match, passed without.
+  **Not yet armed: `.denylist.local` exists but is empty, because the scrubbed strings are
+  deliberately not written anywhere in this repo or this file — MJ has to paste them in.**
+  Limits: `git commit --no-verify` skips it; it does not scan commit messages; it is only as good
+  as the list (indirect identifiers, like the category word, only count if listed).
+- *Found on the way:* (a) `.venv/bin/pre-commit`'s shebang points at a nonexistent
+  `DS Project` venv, so the `pre-commit` CLI fails directly; the installed git hook calls
+  `python -m pre_commit` and works, so commits are still checked. (b) Untracked Finder duplicates `Makefile 2`, `README 2.md`,
+  `reorderpoint/backtest 2.py` sit in the working tree; nothing tracks them, but a `git add .`
+  would. Left alone; safe to delete.
+
+**2. The >0.95 cluster, checked within series.** `divergence.py` gained a per-(fold, series)
+correlation across the 28-day horizon, averaged, undefined (not zero) where either forecast is
+flat. Cluster pairs, all series: pooled 0.934–0.979 → per-series mean **0.35–0.76**, computable on
+only 48–91% of series×folds, and **not at all for any pair with MovingAverage** (flat by
+construction; the Croston family is flat too, and AutoETS is flat on 50% of series). By bucket:
+intermittent 0.33–0.72, regular 0.57–0.94. The magnitude measure that put SeasonalNaive 96% off
+LightGBM (reproduced: 0.964) puts the cluster members **19–28% of mean demand** apart
+(intermittent 21–31%, regular 15–24%).
+- *Restated in the README:* the cluster is similar in level, not shape, and "near-interchangeable"
+  was too strong. Real difference, about a quarter of SeasonalNaive's.
+- *A separate error in the old claim, found while checking:* the README said all four cluster
+  models clear 0.95 on every pair, "0.934–0.979". MovingAverage–LightGBM is 0.934, **below** the
+  line; five of six cluster pairs clear it. The stated range contradicted the stated threshold and
+  went unnoticed through several reviews. Corrected.
+- The report's verdict text is generated from the numbers, so it now says this itself; it also
+  pins the model set to the original five (`REPORT_MODELS`), since the registry now holds three
+  Croston models that are flat by construction and would make most pairs "undefined".
+
+**3. The production-model justification.** README: LightGBM served "for its calibrated intervals".
+- *Do the native quantiles feed sizing? No.* Traced in code and then proved empirically
+  (`reorderpoint/production_model.py`, `reports/production_model_2026-09-29.md`): the shipped cell
+  (S>s, lot 2, 95%, legacy scheme; 12,800 model×fold×series rows) run once as-is and once with
+  every model's P10/P90 replaced by 0 / 1,000 — reorder point, order-up-to and total cost change by
+  exactly 0; only the recorded `lead_time_std` moves. Sizing = P50 lead-time mean + a buffer from
+  pooled empirical residuals; S = s + 2 × P50 mean. The quantile-derived spread survives only as a
+  fallback for a series the calibration has no buffer for, which never triggers here. Pinned by
+  `test_calibrated_decision_does_not_read_the_forecast_quantiles`. **So the stated justification
+  no longer holds for the reorder decision.** It survives only for display: `/forecast` and the
+  dashboard fan chart show P10–P90, where LightGBM covers 81.2% (nominal 80%) against 58.7–63.6%
+  for every alternative.
+- *Paired bootstrap under the shipped policy, each vs LightGBM ($427/fold):* MovingAverage +$11
+  [−34, +51], AutoETS −$2 [−51, +39], AutoTheta +$22 [−32, +70], CrostonClassic +$15 [−27, +52],
+  CrostonSBA +$14 [−42, +59], TSB +$26 [−21, +69] — **all tied**, pooled and in both intermittency
+  buckets. SeasonalNaive +$99 [+34, +160], the only model LightGBM beats. (Six comparisons: one
+  spurious miss of zero would be roughly a one-in-four event; there were none, so no adjustment
+  was needed.)
+- *Operational grounds* (400-series last fold, fit + predict; statsforecast fits lazily, so `fit`
+  alone reads 0 s and is not reported): LightGBM 22 s, MovingAverage 4 s, CrostonSBA 4 s, TSB 4 s,
+  CrostonClassic 4 s, AutoETS 72–92 s, AutoTheta 225–240 s (two runs, same code, so treat as ±25%).
+  LightGBM also needs the feature pipeline, the forward-exog proxy at serve time, a 110 MB
+  artifact and a retraining cycle; the Croston family needs only each series' own history. The
+  forecasts are not identical (item 2), but the cost tie is measured directly, which is what the
+  choice is about.
+- *Recommendation, not a change:* on operational grounds a Croston-family model (CrostonSBA is the
+  cheapest of the three point-estimate-wise; TSB carries two untuned reference smoothing values)
+  would be the simpler thing to serve. **Not switched** — MJ asked to hear first. Costs of
+  switching that the cost table does not show: the `/forecast` and fan-chart intervals get
+  narrower (coverage ~60% vs 81%; a conformal recalibration could be tried), the safety-stock
+  calibration must be refit on the new model's residuals (`make calibrate` with the model swapped;
+  `calibration.model_name`), and `serve.py`/`train.py`/`dashboard.py` currently assume the
+  persisted LightGBM artifact. README states the justification honestly and leaves the switch open.
+- *A second headline overclaim, found while re-reading the README against the reports:* it said
+  LightGBM is "the cheapest" / "wins on cost" under the shipped policy (four-reversal table,
+  status block, "Where it fails" table). `reports/order_up_to_2026-09-20.md` already had AutoETS
+  cheapest at lot 2.0 / 95% and LightGBM ranked 2nd; the $99 [$34, $160] is against SeasonalNaive
+  only. Restated in all four places: LightGBM beats SeasonalNaive, AutoETS is nominally cheapest,
+  everything else tied. Both this and the 0.934 slip in item 2 survived because the numbers were
+  right and the sentence around them was not — worth reading claims against the table, not the
+  memory of it.
+
+**4. Backup, and two wrong premises.** `DECISIONS.md` copied to a **private** GitHub repo
+(`Moulik04/stockup-decisions`, visibility confirmed private through the API, content hash of the
+remote copy equal to the local file). Local clone at `~/stockup-decisions-backup`; to re-sync:
+copy the file in, commit, push (one-line commits, same convention as this repo). It is not
+automatic, so it is as current as the last push. **The brief said this file "now holds both master
+prompts". It does not** — it cites them by section number (`0/58` and `3/229` ten-word chunks of the
+two prompts appear in it), so `REORDERPOINT_MASTER_PROMPT.md` and
+`STOCKUP_V1_1_MASTER_PROMPT.md` are still gitignored, untracked and **unbacked**. Not pushed: only
+this file was asked for. **Second premise, more serious: the brief called this file "untracked". It
+is tracked and public** — `git ls-files` lists it, it was added in `d881eda` and edited in `8c93f3f`,
+and `origin/main` serves it (151,816 bytes, byte-size equal to the local copy before this session's
+edits). So the unscrubbed log, Track B references, initials and the privacy entries are already
+published in HEAD and in history; "draft a scrubbed version before anything is published" is moot for
+the current text. Nothing was changed about that: untracking it is a one-line change, but scrubbing
+history means a third force-push and re-tagging, and the 2026-09-23 entry says it was deliberately
+tracked for the v1.1 release. MJ's decision. To check the public copy against the denylist once it is
+populated: `gh api repos/Moulik04/stockup/contents/DECISIONS.md --jq .content | base64 -d | grep -n -i
+-f .denylist.local`. This session's edits to the file are deliberately **not committed**, since
+committing them would publish the privacy-residuals entry. *Scrubbed public draft:* `DECISIONS.public-draft.md` (untracked, excluded via
+`.git/info/exclude`) for review before anything is published. Removed: the two Track B entries and
+the privacy audit; the privacy pass and privacy addendum inside the 2026-09-23 and 2026-09-29
+entries; the one pre-rewrite commit SHA cited (a public pointer to still-reachable old history).
+Rewritten: "MJ" → "the maintainer", "master prompt" → "project brief" (with a header note that
+the brief is private), and the Track B clauses in four other entries generalised to "a real
+deployment". Kept: every diagnosis and correction entry.
+
+**5. Tag.** `v1.1.0` created locally on `0ebde93` (three commits: the hook, the analysis and
+reports, the README/docs/CHANGELOG corrections; `CHANGELOG.md` lists the revised headline claims).
+**Not pushed**: the finding in item 4 (this file is public) may lead to a history rewrite, which
+would move the tag, and it was not clear the release should go out first. To release as is:
+`git push origin main v1.1.0`. NBEATS under S > s stays queued for the next Bridges-2 run and does
+not block the tag.
+
+**Addendum (2026-09-29, later):** where the items above stood by the end of the day. The denylist is
+armed: `.denylist.local` holds 10 entries, and the hook gained an opt-in `re:` prefix (the rest of
+the line is a case-insensitive regular expression) for terms that are only a problem as a whole
+word, with tests (17 in `tests/test_denylist_hook.py`). Scans of the working tree and of every
+reachable blob, path, commit message, author field, tag and ref name found no matches. Decisions:
+no further history rewrite, no force-push and no re-tag; this file stays public as it is, so the
+scrubbed-draft route in item 4 is dropped. Commit SHAs from before the rewrite that were quoted in
+the text (here, in `reorderpoint/holding_sensitivity.py` and in its generated report) are replaced
+by a note that the commit was removed. Old commits still resolve by SHA on GitHub until it collects
+them, as the 2026-09-11 caveat says.
