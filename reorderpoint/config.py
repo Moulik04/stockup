@@ -18,8 +18,8 @@ DAYS_PER_YEAR = 365
 # "Logistics Systems Design", ch. 5 "Inventory Systems" (Georgia Tech course notes, 2002): "A
 # holding cost rate of 25% of the unit value per year is a widely quoted average for the US
 # industry." That is a cross-industry average, not a retail-specific measurement — see
-# docs/decision.md, "Holding cost rate", for what it does and does not establish. Track B replaces
-# it with the business's own figure.
+# docs/decision.md, "Holding cost rate", for what it does and does not establish. Track B (UCI
+# Online Retail II) has no cost data either, so it uses this same rate.
 DEFAULT_ANNUAL_HOLDING_RATE = 0.25
 
 # The range this project treats as plausible for a carrying cost, used to shade the cost-vs-rate
@@ -106,7 +106,6 @@ class CostParams:
 @dataclass(frozen=True)
 class Config:
     track: str  # "a" or "b"
-    track_b_data_path: str | None
     costs: CostParams
 
 
@@ -127,7 +126,6 @@ def load_config() -> Config:
 
     return Config(
         track=track,
-        track_b_data_path=os.environ.get("TRACK_B_DATA_PATH") or None,
         costs=CostParams(
             holding_cost_rate=float(
                 os.environ.get("HOLDING_COST_RATE", annual_to_daily(DEFAULT_ANNUAL_HOLDING_RATE))

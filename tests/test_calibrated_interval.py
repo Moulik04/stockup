@@ -118,7 +118,6 @@ def test_served_sizing_gives_an_unseen_series_a_buffer_even_when_the_model_has_n
 
     config = Config(
         track="a",
-        track_b_data_path=None,
         costs=CostParams(
             holding_cost_rate=0.02,
             stockout_penalty_per_unit=5.0,

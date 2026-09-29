@@ -1,4 +1,4 @@
-.PHONY: setup data data-full data-reconcile eda backtest divergence decide safety-stock service-level holding-sensitivity breakeven optimal-target penalty holdout croston production-model reconcile train calibrate score serve dashboard test lint format
+.PHONY: setup data data-b data-full data-reconcile eda backtest divergence decide safety-stock service-level holding-sensitivity breakeven optimal-target penalty holdout croston production-model reconcile train calibrate score serve dashboard test lint format
 
 setup:
 	uv sync
@@ -7,6 +7,12 @@ setup:
 data:
 	uv run python scripts/download_m5.py
 	uv run python -m reorderpoint.ingest
+
+# Track B: download UCI Online Retail II (CC BY 4.0), clean it to the weekly SKU panel, and write
+# reports/track_b_cleaning_<date>.md (what every rule removed, zero share, seasonality, bulk orders).
+data-b:
+	python3 scripts/download_online_retail.py
+	uv run python -m reorderpoint.online_retail
 
 # Full M5 (all 3 categories) — needed for reconcile's cross-category hierarchy. Not the
 # `data` default: HOBBIES-only keeps Phase 0-4's day-to-day iteration fast. Safe on an 8.6GB

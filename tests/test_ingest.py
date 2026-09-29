@@ -1,4 +1,5 @@
-"""Schema tests for both ingest tracks — run against fixtures shaped like the real files.
+"""Schema tests for the Track A ingest — run against fixtures shaped like the real files.
+(Track B's ingest, the Online Retail cleaning rules, is tested in `test_online_retail.py`.)
 
 Track A fixtures mirror M5's actual column layout (calendar.csv, sell_prices.csv,
 sales_train_validation.csv) so this exercises the real melt/join logic, not a simplification.
@@ -9,7 +10,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from reorderpoint.ingest import CORE_COLUMNS, load_track_a, load_track_b
+from reorderpoint.ingest import CORE_COLUMNS, load_track_a
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -17,11 +18,6 @@ FIXTURES = Path(__file__).parent / "fixtures"
 @pytest.fixture
 def track_a_panel() -> pd.DataFrame:
     return load_track_a(FIXTURES / "m5_sample")
-
-
-@pytest.fixture
-def track_b_panel() -> pd.DataFrame:
-    return load_track_b(FIXTURES / "track_b_sample.csv")
 
 
 def test_track_a_has_core_columns(track_a_panel):
@@ -54,31 +50,3 @@ def test_track_a_cat_filter():
 
     empty = load_track_a(FIXTURES / "m5_sample", cat_ids=["FOODS"])
     assert empty.empty
-
-
-def test_track_b_has_core_columns(track_b_panel):
-    assert set(CORE_COLUMNS).issubset(track_b_panel.columns)
-
-
-def test_track_b_shape(track_b_panel):
-    assert len(track_b_panel) == 4
-    assert track_b_panel["series_id"].nunique() == 2
-
-
-def test_track_b_missing_required_column_raises(tmp_path):
-    bad = tmp_path / "bad.csv"
-    bad.write_text("sku,date\nFAN-1,2023-01-01\n")
-    with pytest.raises(ValueError, match="missing required columns"):
-        load_track_b(bad)
-
-
-def test_tracks_produce_compatible_core_dtypes(track_a_panel, track_b_panel):
-    for col in CORE_COLUMNS:
-        a_dtype = track_a_panel[col].dtype
-        b_dtype = track_b_panel[col].dtype
-        if col == "date":
-            assert str(a_dtype).startswith("datetime64")
-            assert str(b_dtype).startswith("datetime64")
-        elif col in {"y", "price"}:
-            assert pd.api.types.is_numeric_dtype(a_dtype)
-            assert pd.api.types.is_numeric_dtype(b_dtype) or track_b_panel[col].isna().all()

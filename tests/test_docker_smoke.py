@@ -52,7 +52,6 @@ def _config():
 
     return Config(
         track="a",
-        track_b_data_path=None,
         costs=CostParams(
             holding_cost_rate=0.25 / 365,
             stockout_penalty_per_unit=1.0,

@@ -40,7 +40,6 @@ def _panel() -> pd.DataFrame:
 def _config() -> Config:
     return Config(
         track="a",
-        track_b_data_path=None,
         costs=CostParams(
             holding_cost_rate=0.02,
             stockout_penalty_per_unit=5.0,

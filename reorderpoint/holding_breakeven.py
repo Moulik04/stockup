@@ -692,7 +692,7 @@ def build_report(
         'source is 25%/yr (`docs/decision.md`, "Holding cost rate"); the reading of the result '
         f"does not depend on the exact bounds — at the crossover a unit held for a year costs "
         f"{be / 100:.1f}× the unit itself.",
-        "- **Track B** replaces the assumptions with measured figures; rerun `make breakeven` and "
+        "- **A business's own figures** replace the assumptions; rerun `make breakeven` and "
         "the chart, the README figure and the dashboard sliders all follow.",
         "",
     ]

@@ -1,11 +1,12 @@
 """Raw data (Track A or Track B) -> canonical long table (series_id, date, y, price, exog...).
 
 Track A (M5): sales_train_validation.csv (wide, one row per series) + calendar.csv + sell_prices.csv
-melted and joined into one long table.
+melted and joined into one long table, daily.
 
-Track B (business): one CSV/Excel with sku/date/units_sold[/unit_price][/on_hand], renamed onto
-the same core columns (series_id, date, y, price) so the rest of the pipeline is track-agnostic.
-See data/track_b/README.md for the schema contract.
+Track B (UCI Online Retail II, a small UK online gift-ware seller): the transaction workbook
+cleaned, netted and aggregated to SKU x week by `online_retail.py`, onto the same core columns
+(series_id, date, y, price) so the rest of the pipeline is track-agnostic. `date` is the Monday
+of the week. See data/track_b/README.md and docs/data.md.
 """
 
 from __future__ import annotations
@@ -16,13 +17,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from reorderpoint import online_retail
 from reorderpoint.config import REPO_ROOT, load_config
 
 CORE_COLUMNS = ["series_id", "date", "y", "price"]
 
 TRACK_A_RAW_DIR = REPO_ROOT / "data" / "track_a" / "raw"
 TRACK_A_PROCESSED = REPO_ROOT / "data" / "track_a" / "processed" / "panel.parquet"
-TRACK_B_PROCESSED = REPO_ROOT / "data" / "track_b" / "processed" / "panel.parquet"
+TRACK_B_PROCESSED = online_retail.TRACK_B_PROCESSED
 
 
 def load_track_a(
@@ -78,27 +80,11 @@ def load_track_a(
     return long[keep].sort_values(["series_id", "date"]).reset_index(drop=True)
 
 
-def load_track_b(path: Path) -> pd.DataFrame:
-    """Read the business export and rename it onto the canonical core schema."""
-    if path.suffix.lower() in {".xlsx", ".xls"}:
-        df = pd.read_excel(path)
-    else:
-        df = pd.read_csv(path)
-    df["date"] = pd.to_datetime(df["date"])
-
-    required = {"sku", "date", "units_sold"}
-    missing = required - set(df.columns)
-    if missing:
-        raise ValueError(f"Track B data missing required columns: {sorted(missing)}")
-
-    df = df.rename(columns={"sku": "series_id", "units_sold": "y", "unit_price": "price"})
-    if "price" not in df.columns:
-        df["price"] = pd.NA
-
-    keep = list(CORE_COLUMNS)
-    if "on_hand" in df.columns:
-        keep.append("on_hand")
-    return df[keep].sort_values(["series_id", "date"]).reset_index(drop=True)
+def load_track_b(raw_path: Path = online_retail.RAW_XLSX) -> pd.DataFrame:
+    """The Online Retail II workbook as the canonical weekly SKU panel (cleaning rules, series
+    selection and the reasons for each are in `online_retail.py` and `docs/data.md`)."""
+    panel, _ = online_retail.build_panel(online_retail.load_raw(raw_path))
+    return panel[CORE_COLUMNS].reset_index(drop=True)
 
 
 def main() -> None:
@@ -120,9 +106,11 @@ def main() -> None:
         panel = load_track_a(TRACK_A_RAW_DIR, store_ids=args.store_ids, cat_ids=args.cat_ids)
         out_path = args.out or TRACK_A_PROCESSED
     else:
-        if not config.track_b_data_path:
-            raise SystemExit("REORDERPOINT_TRACK=b but TRACK_B_DATA_PATH is not set in .env")
-        panel = load_track_b(Path(config.track_b_data_path))
+        if not online_retail.RAW_XLSX.exists():
+            raise SystemExit(
+                f"{online_retail.RAW_XLSX} not found: run scripts/download_online_retail.py"
+            )
+        panel = load_track_b()
         out_path = TRACK_B_PROCESSED
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

@@ -40,7 +40,7 @@ def _costs(**over) -> CostParams:
 
 
 def _config(**over) -> Config:
-    return Config(track="a", track_b_data_path=None, costs=_costs(**over))
+    return Config(track="a", costs=_costs(**over))
 
 
 def _panel() -> pd.DataFrame:
@@ -303,7 +303,7 @@ def test_serving_and_harness_agree_on_the_order_up_to_level_too(monkeypatch):
     served = serve.size_decisions(
         preds,
         pd.Series(0.0, index=sorted(preds["series_id"].unique())),
-        Config(track="a", track_b_data_path=None, costs=_costs(lot_multiple=lot)),
+        Config(track="a", costs=_costs(lot_multiple=lot)),
         _calibration(calib_df),
     )
     for col in ("reorder_point", "order_up_to"):
