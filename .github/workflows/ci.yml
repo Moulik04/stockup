@@ -37,3 +37,42 @@ jobs:
       # "smoke backtest on a tiny fixture" acceptance criterion.
       - name: Test
         run: uv run pytest -q
+
+  # Builds the serving image and asks the running container real questions. Nothing did this before,
+  # and the Dockerfile stayed broken (no wheel for the pinned Python, no compiler in the slim image,
+  # a README the project install needs) without any check noticing. The fixture and the expected
+  # numbers, worked out by hand, are in scripts/docker_smoke.py.
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install
+
+      # Only what the fixture builder imports (and the image installs): the `serve` group.
+      - name: Install serving dependencies
+        run: uv sync --only-group serve
+
+      - name: Prepare a build context (tiny panel, model, calibration)
+        run: .venv/bin/python scripts/docker_smoke.py prepare build/docker-context
+
+      # The image's Python minor comes from .python-version, the same file local development and
+      # the test job use, so wheel availability cannot drift between them.
+      - name: Build the image
+        run: docker build --build-arg PYTHON_VERSION=$(cat .python-version) -t stockup-smoke build/docker-context
+
+      - name: Run the container
+        run: docker run -d --name stockup-smoke -p 8000:8000 stockup-smoke
+
+      - name: Check /health, /reorder, /forecast and /metrics
+        run: .venv/bin/python scripts/docker_smoke.py check http://localhost:8000
+
+      - name: Container logs
+        if: failure()
+        run: docker logs stockup-smoke

@@ -1,14 +1,24 @@
-FROM python:3.13-slim AS base
+# The Python minor is the one in `.python-version`, which is also what local development and CI
+# run. `tests/test_python_pin.py` fails if this default drifts from it, and CI builds with
+# `--build-arg PYTHON_VERSION=$(cat .python-version)`. Wheel availability differs between minors
+# (statsforecast 2.0.1 has none for 3.13), so the image must not choose its own.
+ARG PYTHON_VERSION=3.13
+FROM python:${PYTHON_VERSION}-slim AS base
 
 # No OpenMP runtime (`libgomp1`), no compiler: the image installs only the `serve` dependency group
 # (pyproject.toml) — what `uvicorn reorderpoint.serve:app` imports, which excludes lightgbm,
 # statsforecast and numba (`tests/test_serve_imports.py`). The full dependency set does not build
 # in this image: statsforecast ships no Python 3.13 wheel and needs a C++ compiler to build.
+#
+# uv uses this image's Python instead of downloading its own (pyproject.toml sets
+# `python-preference = "only-managed"` for development), so the pinned base image is the one the
+# wheels are chosen for, and a `.python-version` that does not match it fails the build loudly.
+ENV UV_PYTHON_PREFERENCE=only-system UV_PYTHON_DOWNLOADS=never
 RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock .python-version ./
 RUN uv sync --frozen --only-group serve
 
 # The project itself is not installed (`--only-group` skips it); the app runs from /app.
