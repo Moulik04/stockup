@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from reorderpoint import backtest as bt
+from reorderpoint.config import load_config
 
 FORECASTS_PATH = bt.PANEL_PATH.parent / "backtest_forecasts.parquet"
 CLOSE_THRESHOLD = 0.05
@@ -79,13 +80,17 @@ def wide_p50(forecasts: pd.DataFrame) -> pd.DataFrame:
     return wide.join(extra, how="left")
 
 
-def per_series_correlation(wide: pd.DataFrame, a: str, b: str) -> pd.Series:
+def per_series_correlation(
+    wide: pd.DataFrame, a: str, b: str, keys: tuple[str, ...] = ("fold", "series_id")
+) -> pd.Series:
     """Pearson correlation of `a`'s and `b`'s P50 across the horizon, one value per (fold, series).
 
     NaN where either forecast is flat over the horizon: the correlation has no shape to compare,
-    and 0 would misreport "no agreement" for what is really "nothing to measure".
+    and 0 would misreport "no agreement" for what is really "nothing to measure". `keys` names the
+    index levels that define one group; the lead-time comparison groups by series alone, so the
+    correlation runs across every lead-time window of the series rather than within one fold.
     """
-    keys = ["fold", "series_id"]
+    keys = list(keys)
     da = wide[a] - wide.groupby(level=keys)[a].transform("mean")
     db = wide[b] - wide.groupby(level=keys)[b].transform("mean")
     var_a = (da**2).groupby(level=keys).sum()
@@ -188,6 +193,119 @@ def close_fractions(
         "n_series_folds": int(len(close_df)),
     }
     return per_pair, summary
+
+
+def lead_time_totals(
+    forecasts: pd.DataFrame, models: list[str], lead_time_days: int
+) -> pd.DataFrame:
+    """Each model's P50 summed over consecutive `lead_time_days` windows of every fold's test
+    horizon — the quantity the reorder decision consumes (`decision.py` sizes against the lead-time
+    total, never a single day). One row per (fold, series_id, block); one column per model, plus
+    the realised total `y`. A trailing partial window, if the horizon is not a multiple of the
+    lead time, is dropped rather than compared to full ones."""
+    f = forecasts[forecasts["model"].isin(models)].sort_values(
+        ["model", "fold", "series_id", "date"]
+    )
+    grouped = f.groupby(["model", "fold", "series_id"])
+    f = f.assign(block=grouped.cumcount() // lead_time_days)
+    full = f.groupby(["model", "fold", "series_id", "block"])["date"].transform("size")
+    f = f[full == lead_time_days]
+    totals = f.pivot_table(
+        index=["fold", "series_id", "block"], columns="model", values="p50", aggfunc="sum"
+    ).dropna()
+    totals.columns.name = None
+    realised = f[f["model"] == models[0]].groupby(["fold", "series_id", "block"])["y"].sum()
+    return totals.join(realised, how="left")
+
+
+def lead_time_comparison(
+    wide: pd.DataFrame, totals: pd.DataFrame, models: list[str]
+) -> pd.DataFrame:
+    """Per model pair, the daily-grain agreement next to the lead-time-grain agreement.
+
+    - `pooled_*`: Pearson over every raw value at that grain.
+    - `daily_within`: mean per-(fold, series) correlation across the 28 days (the README's
+      "per-series" figure). `lt_within`: mean per-*series* correlation across all of the series'
+      lead-time windows (four folds x four windows = 16 consecutive weeks here) — a per-fold
+      correlation across only four windows would be defined almost nowhere. `*_defined` is the share
+      of groups where both forecasts move.
+    - `*_diff_frac`: mean absolute difference ÷ mean realised demand at that grain.
+    - `lt_diff_frac_of_mae`: the lead-time difference ÷ the two models' own mean absolute error.
+    """
+    rows = []
+    for a, b in itertools.combinations(models, 2):
+        daily = per_series_correlation(wide, a, b)
+        lead = per_series_correlation(totals, a, b, keys=("series_id",))
+        pair_mae = 0.5 * (
+            (totals[a] - totals["y"]).abs().mean() + (totals[b] - totals["y"]).abs().mean()
+        )
+        rows.append(
+            {
+                "model_a": a,
+                "model_b": b,
+                "pooled_daily": wide[a].corr(wide[b]),
+                "pooled_lt": totals[a].corr(totals[b]),
+                "daily_within": daily.mean() if daily.notna().any() else np.nan,
+                "daily_defined": float(daily.notna().mean()),
+                "lt_within": lead.mean() if lead.notna().any() else np.nan,
+                "lt_defined": float(lead.notna().mean()),
+                "daily_diff_frac": (wide[a] - wide[b]).abs().mean() / wide["y"].mean(),
+                "lt_diff_frac": (totals[a] - totals[b]).abs().mean() / totals["y"].mean(),
+                "lt_diff_frac_of_mae": (totals[a] - totals[b]).abs().mean() / pair_mae,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _lead_time_verdict(table: pd.DataFrame, lead_time_days: int) -> list[str]:
+    """What the lead-time grain does and does not change, generated from the table. The claim
+    under test — the models differ in daily shape but agree on lead-time totals — needs the
+    clustered models' *within-series* agreement to reach the pooled level (CORRELATED_THRESHOLD),
+    not just the pooled correlation, which was already high."""
+    involves_seasonal = (table["model_a"] == "SeasonalNaive") | (
+        table["model_b"] == "SeasonalNaive"
+    )
+    cluster, seasonal = table[~involves_seasonal], table[involves_seasonal]
+    reached = cluster["lt_within"].dropna()
+    agree = len(reached) > 0 and bool((reached > CORRELATED_THRESHOLD).all())
+    lines = [
+        f"**Daily shape washes out for SeasonalNaive, not for the rest.** SeasonalNaive repeats "
+        f"last week's weekly cycle, so summed over a {lead_time_days}-day window its shape "
+        f"cancels: its distance from the other four falls from "
+        f"{seasonal['daily_diff_frac'].min():.0%}–{seasonal['daily_diff_frac'].max():.0%} of mean "
+        f"demand to {seasonal['lt_diff_frac'].min():.0%}–{seasonal['lt_diff_frac'].max():.0%}, and "
+        f"its pooled correlation with them rises from "
+        f"{seasonal['pooled_daily'].min():.2f}–{seasonal['pooled_daily'].max():.2f} to "
+        f"{seasonal['pooled_lt'].min():.2f}–{seasonal['pooled_lt'].max():.2f}.",
+        "",
+    ]
+    if agree:
+        lines += [
+            f"**The clustered models agree on lead-time totals.** Their within-series correlation "
+            f"across lead-time windows is {reached.min():.2f}–{reached.max():.2f}, above the "
+            f"{CORRELATED_THRESHOLD:.2f} pooled line, so what the decision consumes is nearly the "
+            f"same across them even where the daily shape differs.",
+        ]
+    else:
+        lines += [
+            f"**The clustered models do not converge on lead-time totals.** Their pooled "
+            f"correlation was already {cluster['pooled_daily'].min():.2f}–"
+            f"{cluster['pooled_daily'].max():.2f} and is "
+            f"{cluster['pooled_lt'].min():.2f}–{cluster['pooled_lt'].max():.2f} at the lead-time "
+            f"grain, but inside a series it is {reached.min():.2f}–{reached.max():.2f} "
+            f"(across {cluster['lt_defined'].min():.0%}–{cluster['lt_defined'].max():.0%} of "
+            f"series), well short of {CORRELATED_THRESHOLD:.2f}, and they still differ from one "
+            f"another by {cluster['lt_diff_frac'].min():.0%}–{cluster['lt_diff_frac'].max():.0%} "
+            f"of mean lead-time demand (against {cluster['daily_diff_frac'].min():.0%}–"
+            f"{cluster['daily_diff_frac'].max():.0%} daily): "
+            f"{cluster['lt_diff_frac_of_mae'].min():.0%}–"
+            f"{cluster['lt_diff_frac_of_mae'].max():.0%} of their own mean absolute error. "
+            f"Summing over the lead time removes little of the disagreement between them, because "
+            f"most of it was level, not day-to-day shape. The claim that the models agree on "
+            f"lead-time totals is **not supported** for the cluster, and the README does not make "
+            f"it.",
+        ]
+    return [*lines, ""]
 
 
 def pick_representative_series(forecasts: pd.DataFrame, panel: pd.DataFrame) -> dict[str, str]:
@@ -345,8 +463,12 @@ def _fmt_table(df: pd.DataFrame) -> str:
     return bt._markdown_table(df, float_cols=float_cols)
 
 
-def build_report(forecasts: pd.DataFrame, plot_rel_path: str | None) -> tuple[str, dict]:
+def build_report(
+    forecasts: pd.DataFrame, plot_rel_path: str | None, lead_time_days: int | None = None
+) -> tuple[str, dict]:
     models = [m for m in bt.MODEL_FACTORIES if m in REPORT_MODELS]
+    if lead_time_days is None:
+        lead_time_days = load_config().costs.lead_time_days
     wide = wide_p50(forecasts)
     wide["bucket"] = bucket_of(wide["zero_rate"]).to_numpy()
 
@@ -392,6 +514,9 @@ def build_report(forecasts: pd.DataFrame, plot_rel_path: str | None) -> tuple[st
             f"at least one pair: {close_b['any_pair_close']:.1%}.",
             "",
         ]
+
+    totals = lead_time_totals(forecasts, models, lead_time_days)
+    lead_time = lead_time_comparison(wide, totals, models)
 
     headline = {
         "max_pooled_pearson": corr_pooled["pearson_pooled"].max(),
@@ -457,6 +582,20 @@ def build_report(forecasts: pd.DataFrame, plot_rel_path: str | None) -> tuple[st
         f"{close_summary['n_series_folds']} series×folds.",
         f"- At least one pair within 5%: **{close_summary['any_pair_close']:.1%}**.",
         "",
+        f"## At the lead-time grain ({lead_time_days} days)",
+        "",
+        f"The reorder decision consumes each model's forecast summed over the {lead_time_days}-day "
+        "lead time, not day by day, so this repeats the comparison on those sums: every fold's "
+        f"{bt.HORIZON}-day horizon cut into consecutive {lead_time_days}-day windows "
+        f"({len(totals):,} windows). `daily_within` is the per-series×fold correlation above; "
+        "`lt_within` is the mean per-series correlation across all of a series' lead-time windows "
+        f"({bt.N_FOLDS} folds × {bt.HORIZON // lead_time_days} windows, consecutive weeks), with "
+        "`lt_defined` the share of series where both forecasts move. `*_diff_frac` = mean absolute "
+        "difference ÷ mean realised demand at that grain.",
+        "",
+        *_lead_time_verdict(lead_time, lead_time_days),
+        _fmt_table(lead_time),
+        "",
         "## By intermittency bucket",
         "",
         *bucket_sections,
@@ -474,7 +613,11 @@ def build_report(forecasts: pd.DataFrame, plot_rel_path: str | None) -> tuple[st
             "shape correlation looks like.",
             "",
         ]
-    return "\n".join(lines), {"headline": headline, "buckets": bucket_stats}
+    return "\n".join(lines), {
+        "headline": headline,
+        "buckets": bucket_stats,
+        "lead_time": lead_time,
+    }
 
 
 def main() -> None:

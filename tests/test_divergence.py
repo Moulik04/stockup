@@ -130,3 +130,81 @@ def test_per_series_correlation_averages_only_where_both_forecasts_move():
     corr = dv.pairwise_correlations(wide, ["A", "B"]).iloc[0]
     assert corr["frac_series_defined"] == 0.5
     assert corr["mean_series_pearson"] == pytest.approx(1.0)
+
+
+def _forecast_rows(model: str, fold: int, series: str, p50: list[float], y: list[float]):
+    dates = pd.date_range("2026-01-01", periods=len(p50))
+    return pd.DataFrame(
+        {
+            "model": model,
+            "fold": fold,
+            "series_id": series,
+            "date": dates,
+            "p10": 0.0,
+            "p50": p50,
+            "p90": 1.0,
+            "y": y,
+            "zero_rate": 0.5,
+        }
+    )
+
+
+def test_lead_time_totals_sum_consecutive_windows_and_drop_a_partial_tail():
+    # 9 days with a 4-day lead time: two full windows, the ninth day is dropped
+    p50 = [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0, 99.0]
+    y = [0.0, 1.0, 2.0, 3.0, 1.0, 1.0, 1.0, 1.0, 50.0]
+    f = _forecast_rows("A", 1, "s1", p50, y)
+    totals = dv.lead_time_totals(f, ["A"], lead_time_days=4)
+    assert totals["A"].tolist() == [4.0, 8.0]
+    assert totals["y"].tolist() == [6.0, 4.0]
+    assert list(totals.index.names) == ["fold", "series_id", "block"]
+
+
+def test_a_periodic_shape_cancels_over_a_window_the_length_of_its_period():
+    weekly = [3.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0] * 4  # period 7, total 6 per week
+    flat = [6.0 / 7] * 28
+    y = [1.0] * 28
+    f = pd.concat(
+        [
+            _forecast_rows("Periodic", 1, "s1", weekly, y),
+            _forecast_rows("Flat", 1, "s1", flat, y),
+        ]
+    )
+    models = ["Periodic", "Flat"]
+    totals = dv.lead_time_totals(f, models, lead_time_days=7)
+    assert np.allclose(totals["Periodic"], totals["Flat"])  # identical once summed over the week
+    row = dv.lead_time_comparison(dv.wide_p50(f), totals, models).iloc[0]
+    assert row["daily_diff_frac"] > 0.5  # they disagree day by day
+    assert row["lt_diff_frac"] == pytest.approx(0.0, abs=1e-9)  # and not at all per lead time
+
+
+def _comparison_row(model_a: str, model_b: str, lt_within: float) -> dict:
+    return {
+        "model_a": model_a,
+        "model_b": model_b,
+        "pooled_daily": 0.9,
+        "pooled_lt": 0.95,
+        "daily_within": 0.5,
+        "daily_defined": 0.5,
+        "lt_within": lt_within,
+        "lt_defined": 1.0,
+        "daily_diff_frac": 0.5,
+        "lt_diff_frac": 0.2,
+        "lt_diff_frac_of_mae": 0.4,
+    }
+
+
+def test_lead_time_verdict_only_claims_agreement_when_within_series_reaches_the_line():
+    def verdict(lt_within: float) -> str:
+        table = pd.DataFrame(
+            [
+                _comparison_row("SeasonalNaive", "AutoETS", 0.4),
+                _comparison_row("AutoETS", "AutoTheta", lt_within),
+            ]
+        )
+        return "\n".join(dv._lead_time_verdict(table, lead_time_days=7))
+
+    assert "do not converge" in verdict(0.6)
+    assert "not supported" in verdict(0.6)
+    assert "agree on lead-time totals" in verdict(0.99)
+    assert "not supported" not in verdict(0.99)

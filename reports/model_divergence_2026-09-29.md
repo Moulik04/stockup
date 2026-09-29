@@ -55,6 +55,27 @@ Correlation columns: `pooled` = raw P50 vectors (dominated by between-series vol
 - Every pair within 5%: **0.1%** of 1600 series×folds.
 - At least one pair within 5%: **67.1%**.
 
+## At the lead-time grain (7 days)
+
+The reorder decision consumes each model's forecast summed over the 7-day lead time, not day by day, so this repeats the comparison on those sums: every fold's 28-day horizon cut into consecutive 7-day windows (6,400 windows). `daily_within` is the per-series×fold correlation above; `lt_within` is the mean per-series correlation across all of a series' lead-time windows (4 folds × 4 windows, consecutive weeks), with `lt_defined` the share of series where both forecasts move. `*_diff_frac` = mean absolute difference ÷ mean realised demand at that grain.
+
+**Daily shape washes out for SeasonalNaive, not for the rest.** SeasonalNaive repeats last week's weekly cycle, so summed over a 7-day window its shape cancels: its distance from the other four falls from 91%–96% of mean demand to 22%–38%, and its pooled correlation with them rises from 0.66–0.70 to 0.93–0.98.
+
+**The clustered models do not converge on lead-time totals.** Their pooled correlation was already 0.93–0.98 and is 0.97–0.99 at the lead-time grain, but inside a series it is 0.46–0.80 (across 98%–100% of series), well short of 0.95, and they still differ from one another by 15%–25% of mean lead-time demand (against 19%–28% daily): 31%–50% of their own mean absolute error. Summing over the lead time removes little of the disagreement between them, because most of it was level, not day-to-day shape. The claim that the models agree on lead-time totals is **not supported** for the cluster, and the README does not make it.
+
+| model_a | model_b | pooled_daily | pooled_lt | daily_within | daily_defined | lt_within | lt_defined | daily_diff_frac | lt_diff_frac | lt_diff_frac_of_mae |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SeasonalNaive | MovingAverage | 0.655 | 0.936 | — | 0.000 | 0.490 | 0.932 | 0.954 | 0.352 | 0.678 |
+| SeasonalNaive | AutoETS | 0.686 | 0.939 | 0.157 | 0.418 | 0.483 | 0.932 | 0.944 | 0.351 | 0.682 |
+| SeasonalNaive | AutoTheta | 0.704 | 0.977 | 0.102 | 0.683 | 0.810 | 0.932 | 0.907 | 0.221 | 0.419 |
+| SeasonalNaive | LightGBM | 0.682 | 0.927 | 0.129 | 0.719 | 0.471 | 0.932 | 0.964 | 0.381 | 0.733 |
+| MovingAverage | AutoETS | 0.959 | 0.988 | — | 0.000 | 0.796 | 0.975 | 0.204 | 0.146 | 0.307 |
+| MovingAverage | AutoTheta | 0.954 | 0.982 | — | 0.000 | 0.760 | 0.975 | 0.215 | 0.170 | 0.347 |
+| MovingAverage | LightGBM | 0.934 | 0.970 | — | 0.000 | 0.519 | 0.975 | 0.276 | 0.228 | 0.474 |
+| AutoETS | AutoTheta | 0.979 | 0.983 | 0.755 | 0.477 | 0.724 | 0.990 | 0.188 | 0.168 | 0.346 |
+| AutoETS | LightGBM | 0.962 | 0.974 | 0.472 | 0.500 | 0.465 | 0.995 | 0.232 | 0.197 | 0.412 |
+| AutoTheta | LightGBM | 0.953 | 0.965 | 0.352 | 0.914 | 0.552 | 0.995 | 0.276 | 0.246 | 0.502 |
+
 ## By intermittency bucket
 
 ### intermittent (>50% zero training days: True; n = 1440 series×folds)
