@@ -2429,3 +2429,18 @@ window from 28 to 27 days trips exactly the MovingAverage entries.
 
 **Not done.** The fold-by-fold calibration above; Track S (the synthetic track, still optional); any
 change to the served model.
+
+**Addendum (2026-09-30): CI was red for three commits, and why.** The synthetic Track A golden test (part
+of the regression harness) failed on the x86 CI runner from the harness push (`9c5ad5f`) on: two
+SeasonalNaive entries (holding and total cost at lot 2) differ by 0.16%, while every count, the stockout
+cost, fill rate and CSL are identical. I did not check CI after `9c5ad5f` or `357355e`; I saw the failure
+only on the third push. Worth stating plainly, since the harness exists to say whether Track A moved: it
+could not tell a platform from a regression until it was run on both. So it was, in the same environments,
+before and after the refactor: on Linux arm64 both pass with the macOS values; on Linux x86 (emulated) the
+pre-refactor code fails with **bit-identical** numbers to what the post-refactor code gave on CI (67.59018316485971
+against the captured 67.62186521275511). Before and after agree exactly on each platform; only the platform
+differs. Track A did not move. The golden values had been captured on arm64, and an x86 statsforecast/numpy
+differs slightly in a float-sensitive decision. The test now compares counts exactly and the float fields
+to 0.3%, which is under the smallest effect a genuine one-period change has in it (0.5% to 48%, measured by
+moving the moving-average window from 28 to 27 days); the exact, same-platform comparison stays in the
+real-data test, which skips on CI. Lesson kept: check CI after every push, not only the last.

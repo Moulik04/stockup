@@ -93,7 +93,10 @@ def test_synthetic_daily_panel_reproduces_the_frozen_pre_refactor_numbers(serial
     assert fold_dates == GOLDEN_FOLDS
     assert numbers.keys() == GOLDEN.keys()
     for key, expected in GOLDEN.items():
-        assert numbers[key] == pytest.approx(expected, rel=1e-6), key
+        got = numbers[key]
+        assert got["cycles"] == expected["cycles"], key  # a count of events: exact everywhere
+        floats = {k: v for k, v in expected.items() if k != "cycles"}
+        assert {k: got[k] for k in floats} == pytest.approx(floats, rel=FLOAT_TOLERANCE), key
 
 
 GOLDEN_FOLDS = [
@@ -102,6 +105,16 @@ GOLDEN_FOLDS = [
     [3, "2025-09-01", "2025-09-29"],
     [4, "2025-09-29", "2025-10-27"],
 ]
+# Cost, fill rate and CSL are compared to within 0.3%, not to the last digit. The values were
+# captured on macOS arm64 from the code before the period abstraction (commit ffdff7a) and
+# reproduce exactly on Linux arm64, before and after the refactor. The x86 CI runner differs by up
+# to 0.16% in two SeasonalNaive entries (holding and total cost, lot 2; every count, and the
+# stockout cost, fill rate and CSL, are identical): a float difference in the platform's
+# statsforecast/numpy, not Track A moving. 0.3% is under the smallest effect of a genuine
+# one-period change (moving the moving-average window from 28 to 27 days moves these numbers by
+# 0.5% to 48%). The exact comparison, on one platform, is the real-data test below.
+FLOAT_TOLERANCE = 3e-3
+
 # Captured on the code as it was before the period abstraction (commit ffdff7a).
 GOLDEN = {
     "SeasonalNaive|lot0": {
