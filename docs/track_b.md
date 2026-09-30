@@ -192,6 +192,26 @@ in advance, exactly as the primary's is:
 - Comparing tracks confounds business type with grain (daily against weekly) and with catalogue
   (steady sellers against everything): a difference is not evidence about business type alone.
 
+## As run
+
+Run on 2026-09-29 and 2026-09-30, after the design, the economics, the panels and the reading of every
+rule were public (commits `ffdff7a`, `9c5ad5f` and the runner `357355e`). Results:
+[`reports/track_b_online_retail_2026-09-30.md`](../reports/track_b_online_retail_2026-09-30.md).
+
+- **Nothing in the design changed.** Both panels ran on every selected series, so the fall-back to a
+  fixed 400-series subset was not needed; the primary panel took 13 minutes and the robustness panel
+  17. All eight models ran on all four folds; none failed and none produced a missing forecast.
+- **Two implementation points that follow from the registration, not changes to it.** SeasonalNaive
+  fell back to its plain naive form on the 50-week calibration window, as registered. The
+  held-out-coverage measurement scores only complete lead-time windows: a 13-week fold cut into
+  2-week windows leaves a 1-week remainder, which is not a lead-time total and is not scored as one.
+- **Track A was not moved by the period abstraction this needed** (`tests/test_track_a_regression.py`,
+  frozen from the code before the change; it passes on the code after).
+- **Outcome, in one line:** none of the four findings replicated on the primary panel, and the
+  robustness panel agrees on all four. The report also shows, descriptively and after the fact, that
+  one calibration window in the autumn peak sizes every model's buffer and that each model's cost rank
+  follows its sigma from that window, which limits what the model comparison can be read to mean.
+
 ## Changes after registration
 
 - **2026-09-29, before any model was run: robustness panel added** (at least 13 of the first 52 weeks,

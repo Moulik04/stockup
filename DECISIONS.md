@@ -2363,3 +2363,69 @@ to MJ. Options and their costs are in the checkpoint summary. No model has been 
 business-specific source; "discontinued or stocked out" cannot be told apart in sales data; the
 cancellation window (90 days) covers 93% of matchable cancelled units and was chosen from that count, on
 the same data it is applied to (a descriptive choice, with no model in the loop).
+
+## 2026-09-30 — Track B results: none of the four findings replicated; what was caught, and what this does and does not say
+
+**Context:** the run registered in `docs/track_b.md` (public 2026-09-29, before any model ran) on UCI Online
+Retail II. Full tables: `reports/track_b_online_retail_2026-09-30.md`. Nothing in the design changed
+between registration and results.
+
+**Result, primary panel (1,742 SKUs; margin 27.5%, lead 2 weeks, 95%):** 0 of 4 replicated; the robustness
+panel (2,666 SKUs) agrees on all four.
+1. *Policy over model — not replicated.* `S > s` saves $20.6k per fold per model (about 10% of cost; Track A
+   71%) against a cluster spread of $14.5k (about 9%). Read carefully: the second registered condition
+   (saving above the spread) holds; the rule fails on the first, that all eight savings have CIs excluding
+   zero, because SeasonalNaive's is [-$9.9k, +$4.1k]. All seven non-naive models do save. What did not
+   replicate is the *size* of the policy effect: under `S = s` the realised CSL here is already about 95%
+   (Track A 82%), so there is much less for the ordering rule to fix.
+2. *Calibrated quantile — not replicated, narrowly.* Coverage 97.9-98.3% (mean 98.1%): three of the seven
+   models (AutoETS, LightGBM, MovingAverage) sit just outside the registered ±3 points of 95%, four just
+   inside, and the rule needs all seven. The other two conditions hold: realised CSL 94.7% is 3.3 points
+   below coverage, and 73% of the remaining stockout cycles are undershoot. So the mechanism the finding
+   names is there; the quantile is over-covering.
+3. *The cluster is a tie — not replicated.* 13 of 21 pairs exclude zero (about one is expected by chance).
+   TSB is cheapest (-$6.7k against LightGBM, CI [-$9.4k, -$4.4k]), MovingAverage dearest.
+4. *The trailing mean is enough — not replicated.* MovingAverage minus LightGBM +$7.8k per fold, CI
+   [$4.8k, $10.5k], about 4.5%.
+
+**The economics move two verdicts and leave two alone.** Findings 2 and 3 fail in all 12 cells of the 4
+margins × 3 lead times grid. Finding 1 replicates in 5 of 12 cells and finding 4 in 4 of 12, all at margins
+of 40% and 50%. The registered verdict is at 27.5% and is what is reported. The margin is the least sourced
+input (Track A's figure, held equal on purpose; probably low for a wholesaler), which is why the grid was
+registered; it is not a licence to prefer the cells that agree with Track A, and the report does not.
+
+**Why the model comparison in findings 3 and 4 needs a caution attached.** After the fact, and descriptively
+(a section of the report; it changes no verdict): every model's buffer comes from one two-week window, the
+last two weeks of year 1, late November 2010, which averaged 63 units per SKU-week on the primary panel
+against 31-43 in the four test folds. That inflates every buffer (the 98% coverage), holding cost is about three quarters
+of cost (73-82% by model), and each model's cost rank follows its sigma from that window (rank correlation 0.76 primary, 1.00
+robustness). Every model also over-forecasts the declining panel (mean p50 17-46% above realised). So the
+cluster non-tie is at least partly a statement about one calibration window, not about the models
+forecasting differently in kind. Track A's single window was an ordinary week; this was a design
+consequence flagged in `docs/track_b.md` before the run, not a bug. A calibration that re-estimates the
+buffer fold by fold would test whether findings 3 and 4 survive it. It has not been run, and it would be
+post hoc; if run it must be labelled that way and must not replace the registered verdicts.
+
+**What this does to earlier decisions.** v1.2 served a trailing mean because it was cost-tied with
+LightGBM on Track A. On Track B it is not (finding 4). That is one dataset each way, both under the same
+single-window calibration; it weakens "the trailing mean is enough" from a general claim to a Track A
+result, and the served model is unchanged.
+
+**Caught along the way.** (1) The tests for the verdict logic found a real bug: two functions named `_ci`
+(the bootstrap and the interval formatter) shadowed each other and would have crashed the report; the run
+already in progress had loaded the module before the report code existed, so its results are unaffected.
+(2) The coverage measurement would have scored a 1-week remainder (a 13-week fold cut into 2-week windows)
+as a lead-time total; fixed before results, and inert on Track A (28 days divides by 7). (3) My first
+README sentence said every model was 0.3-0.5 points outside the coverage band; it is three of seven, found
+by counting before publishing. (4) The SeasonalNaive fallback and the absence of missing forecasts are
+verified rather than assumed: it falls back on the 50-week calibration window and not in any fold; neither
+panel has a NaN forecast; every model has every series in every fold.
+
+**Track A was not moved.** Its headline set (fold dates; the cost, CSL, fill-rate and policy-comparison
+tables; held-out coverage; a live refit of six models against the cached forecasts, exactly equal) was
+frozen from the code as it was, `ffdff7a`, and reproduces after the period abstraction, after the model
+fallback, and after the coverage fix. The test was shown to be able to fail: moving the moving-average
+window from 28 to 27 days trips exactly the MovingAverage entries.
+
+**Not done.** The fold-by-fold calibration above; Track S (the synthetic track, still optional); any
+change to the served model.

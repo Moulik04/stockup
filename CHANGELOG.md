@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Added
+
+- **Track B results: none of the four Track A findings replicated on UCI Online Retail II**, on a
+  pre-registered primary panel (1,742 SKUs), with a superset robustness panel (2,666 SKUs) that agrees on
+  all four (`reports/track_b_online_retail_2026-09-30.md`, `docs/track_b.md`, README "Does it
+  replicate?"). Policy over model: `S > s` saves about 10% against a cluster spread of about 9%, and
+  SeasonalNaive does not save at all. Calibrated quantile: coverage 98.1%, realised CSL 94.7%, undershoot
+  73% of stockouts, narrowly failing the registered tolerance. Cluster tie: 13 of 21 pairs exclude zero.
+  Trailing mean: +$7.8k per fold against LightGBM, CI excluding zero. Findings 1 and 4 flip at
+  margins of 40-50%; 2 and 3 do not flip in any of the 12 economics cells. `make track-b` reproduces it.
+- **A period abstraction** (`reorderpoint/grain.py`): fold arithmetic, model season and frequency,
+  averaging windows, LightGBM lags and the lead-time and holding defaults read a `Grain`, daily for
+  Track A and weekly for Track B. **Track A's numbers were frozen first and are unchanged**
+  (`tests/test_track_a_regression.py`, `reorderpoint/track_a_baseline.py`, checked against a live
+  refit of six models and the full cost, CSL, fill-rate and policy-comparison tables).
+- A model that needs more history than a window holds falls back to its non-seasonal form and says so
+  (`StatsForecastQuantileModel.used_fallback`).
+
 ### Changed
 
 - **Track B is now a public dataset, UCI Online Retail II**, not a private business's export (that data

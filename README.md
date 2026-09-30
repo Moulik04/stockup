@@ -200,9 +200,10 @@ cost assumptions.
   replicate there. Cleaned and aggregated to SKU × week (`docs/data.md`, `docs/track_b.md`), then run
   through the identical pipeline via the `REORDERPOINT_TRACK=b` switch. The raw file is not
   committed (`make data-b` downloads it). The public data has no cost information, so its economics
-  are stated assumptions (`docs/track_b.md`), exactly as Track A's are. **No Track B model results
-  yet: the data is cleaned and documented, the models have not been run.** (The earlier plan for
-  Track B, a private business's own export, was dropped: that data will not be available.)
+  are stated assumptions (`docs/track_b.md`), exactly as Track A's are. Results:
+  [`reports/track_b_online_retail_2026-09-30.md`](reports/track_b_online_retail_2026-09-30.md),
+  summarised under "Does it replicate?" below. (The earlier plan for Track B, a private business's
+  own export, was dropped: that data will not be available.)
 
 See [`docs/data.md`](docs/data.md).
 
@@ -215,6 +216,7 @@ the test suite use it; the served model and the container do not).
 make setup      # uv sync + pre-commit install
 make data       # download and ingest Track A (M5), HOBBIES only — fast day-to-day iteration
 make data-b     # Track B: download UCI Online Retail II, clean to the weekly SKU panel, write reports/track_b_cleaning_<date>.md
+make track-b    # Track B: both panels through the ladder and decision layer, writes reports/track_b_online_retail_<date>.md
 make backtest   # rolling-origin backtest, writes reports/backtest_<date>.md
 make divergence # are the models actually different? writes reports/model_divergence_<date>.md
 make decide     # reorder policy + cost simulation, writes reports/decision_<date>.md
@@ -252,6 +254,44 @@ raw data → ingest → canonical long table → feature pipeline (point-in-time
 ```
 
 ## Results
+
+**Does it replicate? Track B, a very different real business (v1.3).** Short answer: **none of the four
+Track A findings replicated on Track B's primary panel, and the robustness panel agrees on all four.**
+The design, economics and the rule for each verdict were fixed and made public before any model ran
+([`docs/track_b.md`](docs/track_b.md)); full tables in
+[`reports/track_b_online_retail_2026-09-30.md`](reports/track_b_online_retail_2026-09-30.md). Weekly SKU
+series from UCI Online Retail II (1,742 SKUs on the primary panel that sold in at least 26 of the first
+52 weeks, 2,666 on the robustness panel at least 13), four folds of 13 weeks over the final year, costs
+in USD at one fixed GBP rate, margin 27.5%, lead time 2 weeks, 95% target.
+
+| finding | Track A | Track B (primary panel) |
+|---|---|---|
+| 1. policy matters more than the model | `S > s` saves 71% of pooled cost; model spread small | **not replicated.** `S > s` saves about 10% ($20.6k per fold per model) against a cluster spread of about 9% of the cheapest cluster model's cost ($14.5k); all seven non-naive models save with CIs excluding zero, SeasonalNaive's does not |
+| 2. the calibrated quantile does what it says; the shortfall is the policy | coverage 94.8-95.1%, CSL 91.9% | **not replicated, narrowly.** Coverage 98.1% on average (97.9-98.3%; three of the seven models sit just outside the registered ±3 points of 95%, four just inside, and the rule needs all seven), realised CSL 94.7% (on target), and 73% of remaining stockouts are undershoot. The other two conditions hold |
+| 3. the model cluster is a tie on cost | all six CIs against LightGBM contain zero | **not replicated.** 13 of 21 pairs exclude zero; TSB cheapest, MovingAverage dearest |
+| 4. the trailing mean is enough | MovingAverage costs +$11 per fold against LightGBM, tied | **not replicated.** The 4-week mean costs $7.8k more per fold, CI [$4.8k, $10.5k] |
+
+How far to read that:
+
+- **The economics move two of the verdicts; two never move.** Findings 2 and 3 fail in every one of the
+  twelve cells of the 4 margins × 3 lead times grid. Finding 1 replicates in 5 of 12 cells and finding 4 in
+  4 of 12, all at gross margins of 40% and 50%. The registered verdict is at 27.5%, Track A's margin, held
+  equal on purpose; a wholesaler's true margin is probably higher, but no figure for this business is
+  sourced, so the higher-margin cells are reported, not preferred.
+- **Part of the model-cost spread is the calibration design, not the models.** Every model's buffer is
+  sized from one two-week window, late November 2010, which averaged 63 units per SKU-week against 31-43
+  in the test folds. That inflates every buffer (hence the 98% coverage), and each model's cost rank
+  follows its calibration sigma from that window (rank correlation 0.76 on the primary panel, 1.00 on the
+  robustness panel). So the non-tie in finding 3 is not evidence that the models forecast differently
+  in kind. Track A's single window was an ordinary week. A calibration that re-estimates the buffer
+  fold by fold would test this directly; it has not been run.
+- **Accuracy and cost still rank models differently**, as on Track A (rank correlation 0.38 and 0.48):
+  LightGBM has the worst MASE of the non-naive models and lands mid-table on cost.
+- **What this does to v1.2's choice of a trailing mean as the served model:** that choice rests on Track
+  A, and finding 4 did not transfer. The evidence for it is one dataset and it is a tie there, not a proof.
+- **Limits that travel with all of it:** two years and one prior holiday season; both panels are products
+  with at least a year of history and both decline over the test period; a single calibration window;
+  costs, margin and lead time are assumptions; `y` is invoiced units, not demand.
 
 **Are the models actually different? (v1.1)** — four of the five models below land within 0.01
 RMSSE of each other, which on a 77%-zero panel is exactly what you'd expect if they were all
