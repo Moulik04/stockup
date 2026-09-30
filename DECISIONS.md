@@ -2406,6 +2406,15 @@ consequence flagged in `docs/track_b.md` before the run, not a bug. A calibratio
 buffer fold by fold would test whether findings 3 and 4 survive it. It has not been run, and it would be
 post hoc; if run it must be labelled that way and must not replace the registered verdicts.
 
+**Withdrawn (added 2026-09-30, later the same day): the paragraph above misdescribed the mechanism.**
+It said every model's buffer came from one two-week window, late November 2010, applied to all four
+folds. That is wrong for the cost simulation, which chains: fold 1 is sized from that window, fold k
+from the first lead-time window of fold k-1. The window-level claims (63 units against 31-43) are true
+of fold 1 only, and "each model's cost rank follows its calibration sigma from that window" was measured
+on fold 1's residuals alone. The inference drawn from them (that the cluster non-tie is at least partly
+one calibration window) is withdrawn. The 2026-09-30 entry below replaces it with what was actually
+tested. The registered verdicts were computed by the simulation as it ran and are unaffected.
+
 **What this does to earlier decisions.** v1.2 served a trailing mean because it was cost-tied with
 LightGBM on Track A. On Track B it is not (finding 4). That is one dataset each way, both under the same
 single-window calibration; it weakens "the trailing mean is enough" from a general claim to a Track A
@@ -2460,3 +2469,64 @@ checked on x86.
 
 Lesson kept, twice over: check CI after every push, not only the last; and a comparison that stops at its
 first failure is not evidence about the rest.
+
+## 2026-09-30 — The calibration window: inherited, misdescribed by me, and not the main lever
+
+**Question put to me:** was the two-week calibration window chosen for weekly data, or inherited from
+Track A's daily hold-out through the period abstraction? If inherited, is it a translation bug?
+
+**Answer, checked against the code and the registration rather than remembered.**
+- *The length was inherited, by rule, and it is not a units bug.* The harness rule is "the lead-time
+  window before fold 1" (`ablate_safety_stock.calibration_residuals`, from `c68fecd`, Track A's own), so
+  the length is one lead time: 7 days on Track A, 2 weeks on Track B. The code computes it correctly in
+  weeks (2010-11-22 to 2010-11-29, a 50-week fit). The registration said this ("as in Track A's
+  harness") and said it lands in the autumn peak. Nothing was silently translated wrongly; a rule that
+  was sensible on an ordinary week was carried to a grain where it is not, without being re-examined.
+- *What I got wrong was the mechanism.* I wrote, in `docs/track_b.md`, the README, this file and the
+  report, that one window sized every fold's buffer. The simulation chains: fold 1 from that window,
+  fold k from the first lead-time window of fold k-1, one residual per series. Only the held-out coverage
+  check applies fold 1's window to every fold, as registered (Track A's does too). Found when the post hoc
+  analysis I first wrote, which encoded my description, failed its own check: it had to reproduce the
+  registered cost table to the last digit and did not (AutoETS at `S = s`: 200,507 against 198,862). The
+  corrected version reproduces it exactly. The earlier paragraph is marked withdrawn where it stands, the
+  registered text is corrected by a dated note, not edited.
+- *The thing that did not get translated was a parameter, not the window.* The intermittency split (more
+  than 50% zero periods) was tuned on daily data, where it cuts a 90/10 split of series. At weekly grain
+  it leaves 98% of the primary panel's series (65% of the robustness panel's) in one bucket. One absolute
+  sigma, pooled across series of very different size and driven by a few huge residuals (sigma 182
+  against a robust sigma of 25; the top 1% of series carry 63% of the variance), then gives each a
+  300-unit buffer: 7.3 times the median series' expected lead-time demand, above 5 times for 61% of
+  series. Not a code bug; a daily-grain parameter carried to weekly grain without re-deriving its job.
+
+**Post hoc grid (not registered; no verdict changed or replaced; no cell preferred).** Window (fold 1's for
+every fold, the registered previous-fold first window, the previous fold's every window) by pooling
+(registered intermittency buckets, Track A's volume quintiles), on the same cached forecasts.
+- *The window is a weak lever.* Across the three windows primary-panel coverage moves only between 97.7%
+  and 98.1% (robustness 97.9% to 98.3%). The hypothesis that a peak-window buffer at twice the test demand
+  drives the over-coverage does not hold up: only fold 1's window is at that level (63 against 31 units per
+  SKU-week; fold 2's window is 48, fold 3's 34, fold 4's 36), and changing it barely moves anything.
+- *The pooling is the lever.* Volume quintiles cut cost about 25% (LightGBM $174.6k to $129.8k, MovingAverage
+  $182.4k to $134.9k), shrink the model spread from $14.5k to $5.1k, bring coverage to 96.1-96.7%, and
+  **finding 2 replicates under them**: in all three windows on the primary panel, in two of three on the
+  robustness panel.
+- *Findings 1, 3 and 4 survive neither.* Finding 3: 10 or more of 21 pairs exclude zero in every cell on
+  the primary panel, 17 to 19 on the robustness panel. Finding 4: the trailing mean is dearer than LightGBM
+  in every cell (primary: $3.5k to $5.8k under quintiles, $7.8k to $14.5k under the registered buckets).
+  Finding 1: on the primary panel the saving exceeds the spread in five of six cells, but the registered
+  clause that every model's saving excludes zero fails in all six (SeasonalNaive's does not); on the
+  robustness panel the spread exceeds the saving in all six.
+- *So the honest reading:* finding 2's failure is, on this evidence, a pooling effect; the other three are
+  not explained by the calibration choices tried here. The window is not the leading suspect, pooling is.
+  I had suggested otherwise in the README lead and was wrong; the lead now says so.
+
+**What a difference of about one cycle means.** On x86 the synthetic MovingAverage run at lot 2 gives 61
+replenishment cycles; on arm64 it gives 62 (`tests/test_track_a_regression.py`). The simulation triggers an
+order when on-hand falls below the reorder point, a discrete decision on a float comparison, and
+platform-level floating-point differences in statsforecast and numpy flip it for one series. **Any
+difference of about one replenishment cycle, and cost differences of around 1% in a small synthetic run,
+are below the noise floor of this code across platforms**; such a difference is not evidence of anything.
+Differences that matter here are tens of percent and stable across platforms, or they are not claimed.
+
+**Standing rule, added to `CLAUDE.md`:** check CI after every push, and do not report "pushed" until it
+is green. Twice in this project a red CI was left for commits: the harness push (`9c5ad5f` onward) and, before
+that, an image that had never built. Both came from reporting on a push instead of on its result.

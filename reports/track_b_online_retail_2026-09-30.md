@@ -166,35 +166,57 @@ Descriptive, no verdict: the short-season end of the catalogue (`docs/track_b.md
 | CrostonSBA | $89,012 | 94.9% | 1.578 |
 | TSB | $60,878 | 92.6% | 1.150 |
 
-## The calibration window, descriptively
+## How each fold's buffer was sized, descriptively
 
-Post hoc and descriptive; it changes no verdict. Every model's buffer is sized from one window, the last two weeks of the first 52, which is late November: the autumn peak. That window's demand level, each model's sigma from it, and each model's forecast bias:
+Post hoc and descriptive; it changes no verdict. The registered simulation sizes fold 1 from the lead-time window just before it (late November, the autumn peak) and each later fold from the first lead-time window of the fold before, one residual per series, pooled into one sigma per intermittency bucket.
 
-Primary panel: the calibration window (2010-11-22 to 2010-11-29) averaged 63.4 units per SKU-week; the test folds averaged fold 1: 30.9, fold 2: 34.0, fold 3: 32.3, fold 4: 42.8. Rank correlation between a model's calibration sigma and its cost rank: 0.76.
+**Primary panel.** Which window sized each fold's buffer, and how busy it was:
 
-| model | calibration sigma (units per lead time) | forecast bias (mean p50 / mean actual - 1) |
-| --- | --- | --- |
-| SeasonalNaive | 220 | +37% |
-| MovingAverage | 182 | +17% |
-| AutoETS | 183 | +28% |
-| AutoTheta | 173 | +21% |
-| LightGBM | 161 | +46% |
-| CrostonClassic | 167 | +23% |
-| CrostonSBA | 170 | +17% |
-| TSB | 160 | +18% |
+| fold | buffer sized from | that window (units per SKU-week) | this fold's test window |
+| --- | --- | --- | --- |
+| 1 | the lead-time window before fold 1 (2010-11-22 to 2010-11-29) | 63.4 | 30.9 |
+| 2 | fold 1's first lead-time window (2010-12-06 to 2010-12-13) | 48.1 | 34.0 |
+| 3 | fold 2's first lead-time window (2011-03-07 to 2011-03-14) | 34.4 | 32.3 |
+| 4 | fold 3's first lead-time window (2011-06-06 to 2011-06-13) | 36.3 | 42.8 |
 
-Robustness panel: the calibration window (2010-11-22 to 2010-11-29) averaged 49.2 units per SKU-week; the test folds averaged fold 1: 23.1, fold 2: 24.7, fold 3: 24.1, fold 4: 34.3. Rank correlation between a model's calibration sigma and its cost rank: 1.00.
+How the pooled sigma behaves, on fold 1's residuals (MovingAverage; LightGBM is alike): sigma 182 units per lead time against a robust sigma (MAD) of 25; the top 1% of series carry 63% of the variance; 98% of series fall in the larger of the two intermittency buckets. The buffer that sigma gives a series in that bucket, 300 units, is 7.3 times the median series' expected lead-time demand, and exceeds five times that demand for 61% of series. Forecast bias (mean p50 against mean actual): SeasonalNaive +37%, MovingAverage +17%, AutoETS +28%, AutoTheta +21%, LightGBM +46%, CrostonClassic +23%, CrostonSBA +17%, TSB +18%.
 
-| model | calibration sigma (units per lead time) | forecast bias (mean p50 / mean actual - 1) |
-| --- | --- | --- |
-| SeasonalNaive | 184 | +36% |
-| MovingAverage | 153 | +17% |
-| AutoETS | 160 | +32% |
-| AutoTheta | 151 | +22% |
-| LightGBM | 149 | +56% |
-| CrostonClassic | 181 | +29% |
-| CrostonSBA | 180 | +22% |
-| TSB | 147 | +17% |
+**Robustness panel.** Which window sized each fold's buffer, and how busy it was:
+
+| fold | buffer sized from | that window (units per SKU-week) | this fold's test window |
+| --- | --- | --- | --- |
+| 1 | the lead-time window before fold 1 (2010-11-22 to 2010-11-29) | 49.2 | 23.1 |
+| 2 | fold 1's first lead-time window (2010-12-06 to 2010-12-13) | 37.0 | 24.7 |
+| 3 | fold 2's first lead-time window (2011-03-07 to 2011-03-14) | 24.7 | 24.1 |
+| 4 | fold 3's first lead-time window (2011-06-06 to 2011-06-13) | 26.9 | 34.3 |
+
+How the pooled sigma behaves, on fold 1's residuals (MovingAverage; LightGBM is alike): sigma 153 units per lead time against a robust sigma (MAD) of 16; the top 1% of series carry 67% of the variance; 65% of series fall in the larger of the two intermittency buckets. The buffer that sigma gives a series in that bucket, 252 units, is 9.3 times the median series' expected lead-time demand, and exceeds five times that demand for 66% of series. Forecast bias (mean p50 against mean actual): SeasonalNaive +36%, MovingAverage +17%, AutoETS +32%, AutoTheta +22%, LightGBM +56%, CrostonClassic +29%, CrostonSBA +22%, TSB +17%.
+
+## Sensitivity to the calibration (post hoc)
+
+**Not registered, and it changes no verdict above.** After the results, two things about the buffer were found: fold 1's window is late November (the autumn peak), and at weekly grain the 50%-zero-periods intermittency split leaves 98% of the primary panel's series (65% of the robustness panel's) in one bucket, so one pooled absolute sigma, driven by a few very large residuals, is nearly every series' buffer. This varies the window (three ways) and the pooling (two ways) on the same cached forecasts; the registered design is the marked cell and is reproduced to the last digit. `R` marks a replicated verdict under the same registered rule. Nothing is tuned and no cell is preferred.
+
+Primary panel:
+
+| window | pooling | LightGBM cost/fold (S>s) | 1: saving / spread | 1 | 2: coverage / CSL | 2 | 3: pairs excluding zero | 3 | 4: MovingAverage minus LightGBM | 4 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| previous fold's every window | intermittency buckets (registered) | $173,090 | $18,946 / $21,886 | - | 97.8% / 95.0% | - | 18 of 21 | - | $14,481 [$11,330, $17,439] | - |
+| previous fold's every window | volume quintiles | $132,759 | $9,712 / $6,894 | - | 96.7% / 91.3% | R | 10 of 21 | - | $3,510 [$846, $6,136] | - |
+| previous fold's first window (registered) | intermittency buckets (registered) | $174,555 | $20,589 / $14,495 | - | 97.7% / 94.7% | - | 13 of 21 | - | $7,803 [$4,770, $10,536] | - |
+| previous fold's first window (registered) | volume quintiles | $129,753 | $11,779 / $5,098 | - | 96.1% / 90.2% | R | 10 of 21 | - | $5,098 [$2,534, $7,521] | - |
+| fold 1's window for every fold | intermittency buckets (registered) | $176,884 | $16,609 / $12,058 | - | 98.1% / 95.7% | - | 16 of 21 | - | $8,458 [$5,618, $11,075] | - |
+| fold 1's window for every fold | volume quintiles | $124,767 | $8,236 / $6,067 | - | 96.2% / 90.3% | R | 10 of 21 | - | $5,806 [$3,195, $8,335] | - |
+
+Robustness panel:
+
+| window | pooling | LightGBM cost/fold (S>s) | 1: saving / spread | 1 | 2: coverage / CSL | 2 | 3: pairs excluding zero | 3 | 4: MovingAverage minus LightGBM | 4 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| previous fold's every window | intermittency buckets (registered) | $230,377 | $21,080 / $41,481 | - | 97.9% / 94.2% | - | 18 of 21 | - | $17,670 [$14,589, $20,836] | - |
+| previous fold's every window | volume quintiles | $172,764 | $10,969 / $11,542 | - | 96.8% / 90.7% | - | 17 of 21 | - | $6,380 [$3,564, $9,359] | - |
+| previous fold's first window (registered) | intermittency buckets (registered) | $232,342 | $22,635 / $38,436 | - | 97.9% / 94.1% | - | 19 of 21 | - | $9,903 [$6,911, $12,994] | - |
+| previous fold's first window (registered) | volume quintiles | $169,957 | $12,382 / $14,447 | - | 96.5% / 90.1% | R | 19 of 21 | - | $8,541 [$5,815, $11,437] | - |
+| fold 1's window for every fold | intermittency buckets (registered) | $236,387 | $18,165 / $46,655 | - | 98.3% / 95.3% | - | 17 of 21 | - | $3,164 [$631, $6,001] | - |
+| fold 1's window for every fold | volume quintiles | $163,329 | $8,373 / $21,085 | - | 96.4% / 89.7% | R | 19 of 21 | - | $10,731 [$8,160, $13,544] | - |
 
 ## Limits that travel with every result above
 

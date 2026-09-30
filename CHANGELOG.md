@@ -1,6 +1,23 @@
 # Changelog
 
-## Unreleased
+## v1.3.0 — 2026-09-30
+
+A pre-registered replication of the project's findings on a second, very different real business, and
+what it showed: none replicated. The README is rescoped to say the headline claims are Track A's.
+
+### Headline claims revised
+
+- **The README's thesis is now scoped to its evidence.** "Fixing the policy is worth roughly 11× picking
+  the model", the model-cluster tie and the trailing-mean production choice are M5 (Track A) results.
+  Put to a pre-registered replication on Track B (a small UK gift-ware wholesaler), none of the four
+  findings replicated under the registered design; a superset robustness panel agrees. The lead of the
+  README says so, not only the Track B section.
+- **A description of the Track B calibration was wrong and is corrected** (docs/track_b.md,
+  DECISIONS.md): the cost simulation sizes fold k's buffer from fold k-1's first lead-time window, not
+  from one window for all folds. No verdict changes; the interpretation built on the wrong description is
+  withdrawn. A post hoc grid (window × pooling) replaces it: the window is a weak lever, the pooling of one
+  absolute sigma across series of very different size is the strong one, and finding 2 is the only
+  finding that moves with it.
 
 ### Added
 
@@ -12,6 +29,13 @@
   73% of stockouts, narrowly failing the registered tolerance. Cluster tie: 13 of 21 pairs exclude zero.
   Trailing mean: +$7.8k per fold against LightGBM, CI excluding zero. Findings 1 and 4 flip at
   margins of 40-50%; 2 and 3 do not flip in any of the 12 economics cells. `make track-b` reproduces it.
+- **Post hoc sensitivity to the calibration** (`reorderpoint/track_b_posthoc.py`, report section): a 3 × 2
+  grid of calibration window by pooling, with the registered simulation as one cell reproduced to the last
+  digit. Not registered, no verdict changed. Volume-quintile pooling cuts cost about 25% and makes
+  finding 2 replicate; findings 1, 3 and 4 do not replicate in any cell.
+- **`CLAUDE.md`: check CI after every push and do not report "pushed" until it is green.**
+- The synthetic Track A regression test now holds a golden set per CPU architecture (arm64, x86): the
+  two differ by up to about 1% in cost and by one replenishment cycle, from platform float noise.
 - **A period abstraction** (`reorderpoint/grain.py`): fold arithmetic, model season and frequency,
   averaging windows, LightGBM lags and the lead-time and holding defaults read a `Grain`, daily for
   Track A and weekly for Track B. **Track A's numbers were frozen first and are unchanged**

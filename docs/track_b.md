@@ -85,6 +85,12 @@ in the ladder, the tables and finding 1's "every model", but not in the cluster.
   window sizes the buffer for all four folds, so a buffer set at peak volume is applied in summer. If the
   buffer is too large in the quiet folds, that is a property of a single calibration window, and it is
   the same design choice Track A made with a single, unseasonal window.
+  **Correction (added 2026-09-30): this bullet misdescribed the simulation.** The cost simulation
+  (`ablate_safety_stock.run_cell`, which the registration said it used) sizes fold 1 from the window
+  before it, but fold k from the first lead-time window of fold k-1, one residual per series, not from
+  fold 1's window for every fold. Only the held-out *coverage* check applies fold 1's window to all
+  folds, as registered and as Track A's does. The window before fold 1 is still late November, and it
+  is still one lead-time window per fold; "one window for all four folds" is wrong for the costs.
 - **SeasonalNaive on the calibration window.** It needs 52 weeks and that window has 50, so it falls back
   to the plain naive forecast there (the fold forecasts use the 52-week season: fold 1 has exactly 52).
   AutoETS and AutoTheta are non-seasonal in every fold (no window holds two annual cycles).
@@ -208,9 +214,21 @@ rule were public (commits `ffdff7a`, `9c5ad5f` and the runner `357355e`). Result
 - **Track A was not moved by the period abstraction this needed** (`tests/test_track_a_regression.py`,
   frozen from the code before the change; it passes on the code after).
 - **Outcome, in one line:** none of the four findings replicated on the primary panel, and the
-  robustness panel agrees on all four. The report also shows, descriptively and after the fact, that
-  one calibration window in the autumn peak sizes every model's buffer and that each model's cost rank
-  follows its sigma from that window, which limits what the model comparison can be read to mean.
+  robustness panel agrees on all four. Afterwards, post hoc and not registered (below), the buffer's
+  pooling across series of very different size, more than its window, is what the results turn on.
+
+## Post hoc, not registered
+
+After the results, a 3 x 2 grid was run on the same cached forecasts (window: fold 1's for every fold,
+the registered previous-fold first window, the previous fold's every window; pooling: the registered
+intermittency buckets, Track A's volume quintiles), with the registered design as one cell,
+reproduced to the last digit before anything else was reported. The four registered rules were applied
+to every cell. **No verdict changed, none is replaced, no cell is preferred.** Result in one line: the
+window matters little (primary-panel coverage 97.7-98.1% across the three), the pooling matters a lot
+(volume quintiles cut cost about 25%, shrink the model spread from $14.5k to about $5k, and finding 2
+replicates under them); findings 3 and 4 do not replicate in any cell. Tables:
+[`reports/track_b_online_retail_2026-09-30.md`](../reports/track_b_online_retail_2026-09-30.md);
+code and its check: `reorderpoint/track_b_posthoc.py`.
 
 ## Changes after registration
 
@@ -221,3 +239,10 @@ rule were public (commits `ffdff7a`, `9c5ad5f` and the runner `357355e`). Result
   addition: the primary rule, the economics, the folds and the replication rules are untouched, and the
   robustness panel's role (agrees or disagrees, never a substitute) was registered in the same commit that
   introduced it.
+- **2026-09-30, after the results: a correction to how the calibration was described** (not a change
+  to the design or to any result). The registration and the first write-up said one calibration window
+  sized every fold's buffer. The simulation in fact chains fold to fold (above). The first version of
+  the post hoc analysis encoded the wrong description and failed its own check against the registered
+  cost table, which is how it was found. The verdicts were computed by the simulation as it ran and
+  are unaffected; the interpretation built on the wrong description was withdrawn (DECISIONS.md,
+  2026-09-30).

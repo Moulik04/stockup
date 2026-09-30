@@ -6,6 +6,17 @@ honest, leakage-free backtests. The output is a reorder table, not a chart.
 
 ## The finding
 
+**Scope, before anything else.** Everything in this section was measured on one dataset: M5 (Track A),
+a giant US retailer, daily, one category, 400 sampled series. It was then put to a **pre-registered
+replication on a second real business**, a small UK online gift-ware wholesaler (Track B, UCI Online
+Retail II): four of the findings below, each written down with its decision rule before any model ran.
+**None replicated on the primary panel, and a superset robustness panel agrees** (see "Does it
+replicate?" under "Results"). In particular the magnitude "fixing the policy is worth ~11× picking the
+model", the model-cluster tie, and the trailing-mean production choice are **M5 results that did not
+transfer under the registered design**, not general ones. A post hoc look at why (not registered, it
+changes no verdict) points first at how the safety-stock buffer is pooled across series of very
+different size, not at the timing of the calibration window. Read what follows as Track A's findings.
+
 **Which forecasting model is cheapest to run is not a property of the models. It depends on four
 things — what it costs to hold stock, what a lost sale costs, the service target, and the ordering
 policy — and the answer flips across plausible values of each.** That is the result, and it is
@@ -32,12 +43,13 @@ evidence. `S > s` closes most, not all, of the service gap itself — 51% of the
 after the fix are still undershoot, so the trigger, not just the lot size, is still leaving service
 on the table (see "Where it fails").
 
-**The magnitudes say more than any of the three stories alone: fixing the policy is worth roughly
-11× what picking the right model is.** Repairing `S = s` saved **$1,116 per fold** [$576, $1,920] at
+**On M5, the magnitudes say more than any of the three stories alone: fixing the policy was worth
+roughly 11× what picking the right model is.** Repairing `S = s` saved **$1,116 per fold** [$576, $1,920] at
 the default target — 71% of the original pooled cost. Choosing LightGBM over SeasonalNaive under the
-*repaired* policy is worth **$99 per fold** [$34, $160]. The value in this project is in the decision
+*repaired* policy is worth **$99 per fold** [$34, $160]. On M5 the value is in the decision
 layer — the ordering policy, the service target, the cost parameters — not in the forecaster; the
-model comparison is real, but it is the smaller number by an order of magnitude.
+model comparison is real, but it is the smaller number by an order of magnitude. On Track B the two
+magnitudes were of similar size (about 10% and 9%).
 
 Four reversals came out of the same five models, on the same panel, without retraining anything —
 only the policy and the pricing changed underneath them:
@@ -162,7 +174,8 @@ swept across them, on both tracks, and why the dashboard has sliders.
 > s` policy shown here to lose on cost — see "Where it fails"). **Since v1.2 the served model is a
 > trailing 28-day mean** (`TrailingMeanModel`, the ladder's MovingAverage rung), not LightGBM: under
 > the repaired policy it beats SeasonalNaive and is cost-tied with LightGBM and every other model
-> tested, and it needs no features, no forward-exog proxy and no trained artifact. **The P10/P90
+> tested, and it needs no features, no forward-exog proxy and no trained artifact. (A Track A result: on Track B
+> the 4-week mean cost more than LightGBM.) **The P10/P90
 > that `/forecast` and the dashboard show are now derived from the same residual calibration that
 > sizes the reorder point**, not read off a model. MinTrace reconciliation's item-level gain
 > (Phase 5, run on AutoETS, not the production model) does not survive a bootstrap; a FastAPI
@@ -278,20 +291,31 @@ How far to read that:
   4 of 12, all at gross margins of 40% and 50%. The registered verdict is at 27.5%, Track A's margin, held
   equal on purpose; a wholesaler's true margin is probably higher, but no figure for this business is
   sourced, so the higher-margin cells are reported, not preferred.
-- **Part of the model-cost spread is the calibration design, not the models.** Every model's buffer is
-  sized from one two-week window, late November 2010, which averaged 63 units per SKU-week against 31-43
-  in the test folds. That inflates every buffer (hence the 98% coverage), and each model's cost rank
-  follows its calibration sigma from that window (rank correlation 0.76 on the primary panel, 1.00 on the
-  robustness panel). So the non-tie in finding 3 is not evidence that the models forecast differently
-  in kind. Track A's single window was an ordinary week. A calibration that re-estimates the buffer
-  fold by fold would test this directly; it has not been run.
+- **How the buffer is sized matters more than when, and finding 2 is the one that moves** (post hoc,
+  not registered, no verdict changed; [report section](reports/track_b_online_retail_2026-09-30.md)).
+  The registered simulation sizes fold 1 from the lead-time window before it, late November at twice
+  the test folds' demand, and each later fold from the first lead-time window of the fold before.
+  Varying that window (one window for every fold, the registered previous-fold first window, every
+  window of the previous fold) moves primary-panel coverage only between 97.7% and 98.1%. Varying the
+  pooling does much more: at weekly grain 98% of the primary panel's series land in one intermittency
+  bucket, so one absolute sigma (182 units against a robust sigma of 25; the top 1% of series carry
+  63% of the variance) gives every series a 300-unit buffer, 7× the median series' expected lead-time
+  demand. With Track A's volume-quintile buckets instead, cost falls about 25%, the model spread
+  shrinks from $14.5k to about $5k, coverage falls to 96-97%, and finding 2 replicates (in all three
+  window variants on the primary panel, two of three on the robustness panel). Findings 3 and 4 do
+  not replicate under any of the six variants (10 or more of 21 pairs still exclude zero; the trailing
+  mean stays dearer than LightGBM in every variant, by $3.5-5.8k under quintile pooling on the primary
+  panel), and on the primary panel finding 1 never passes the registered clause that every model's
+  saving excludes zero (SeasonalNaive's does not). So the leading
+  suspect for finding 2's failure is the pooling of one absolute sigma across series of very different
+  size, not the window's timing; for findings 1, 3 and 4 no calibration variant tried rescues them.
 - **Accuracy and cost still rank models differently**, as on Track A (rank correlation 0.38 and 0.48):
   LightGBM has the worst MASE of the non-naive models and lands mid-table on cost.
 - **What this does to v1.2's choice of a trailing mean as the served model:** that choice rests on Track
   A, and finding 4 did not transfer. The evidence for it is one dataset and it is a tie there, not a proof.
 - **Limits that travel with all of it:** two years and one prior holiday season; both panels are products
-  with at least a year of history and both decline over the test period; a single calibration window;
-  costs, margin and lead time are assumptions; `y` is invoiced units, not demand.
+  with at least a year of history and both decline over the test period; each fold's buffer from one
+  lead-time window of residuals; costs, margin and lead time are assumptions; `y` is invoiced units, not demand.
 
 **Are the models actually different? (v1.1)** — four of the five models below land within 0.01
 RMSSE of each other, which on a 77%-zero panel is exactly what you'd expect if they were all
