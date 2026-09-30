@@ -1,4 +1,4 @@
-.PHONY: setup data data-b data-full data-reconcile eda backtest divergence decide safety-stock service-level holding-sensitivity breakeven optimal-target penalty holdout croston production-model reconcile train calibrate score serve dashboard test lint format
+.PHONY: setup data data-b track-b data-full data-reconcile eda backtest divergence decide safety-stock service-level holding-sensitivity breakeven optimal-target penalty holdout croston production-model reconcile train calibrate score serve dashboard test lint format
 
 setup:
 	uv sync
@@ -13,6 +13,14 @@ data:
 data-b:
 	python3 scripts/download_online_retail.py
 	uv run python -m reorderpoint.online_retail
+
+# Track B end to end: both panels (primary, robustness) through the ladder, the decision layer, the
+# policy comparison and the 4 x 3 economics grid, then reports/track_b_online_retail_<date>.md.
+# About half an hour. One process per panel: the panel path is fixed at import.
+track-b:
+	REORDERPOINT_TRACK=b TRACK_B_PANEL=primary uv run python -m reorderpoint.track_b run
+	REORDERPOINT_TRACK=b TRACK_B_PANEL=robustness uv run python -m reorderpoint.track_b run
+	REORDERPOINT_TRACK=b uv run python -m reorderpoint.track_b report
 
 # Full M5 (all 3 categories) — needed for reconcile's cross-category hierarchy. Not the
 # `data` default: HOBBIES-only keeps Phase 0-4's day-to-day iteration fast. Safe on an 8.6GB
