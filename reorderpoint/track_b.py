@@ -30,6 +30,7 @@ from unittest import mock
 
 import numpy as np
 import pandas as pd
+from scipy.stats import norm
 
 from reorderpoint import ablate_safety_stock as ab
 from reorderpoint import backtest as bt
@@ -38,6 +39,7 @@ from reorderpoint import croston as cr
 from reorderpoint import divergence as dv
 from reorderpoint import optimal_target as opt
 from reorderpoint import production_model as pm
+from reorderpoint import safety_stock as ss
 from reorderpoint.config import load_config
 from reorderpoint.grain import GRAIN
 
@@ -549,61 +551,157 @@ def stratum_tables(panel_dir_robust: Path, primary_ids: set[str]) -> pd.DataFram
 
 
 def calibration_diagnostics(panel_dir: Path, res: dict) -> dict | None:
-    """Descriptive evidence on the one calibration window, from the panel's own files: the demand
-    level in that window against each test fold, every model's calibration sigma against its cost
-    rank, and each model's forecast bias. Post hoc and descriptive: it changes no verdict."""
+    """Descriptive evidence on how each fold's buffer was sized, from the panel's own files: which
+    window sized it and how busy that window was against the fold it sized, and how the pooled
+    sigma behaves across series of very different size. Post hoc and descriptive: changes no
+    verdict.
+
+    The registered simulation sizes fold 1 from the lead-time window before it and fold k from the
+    first lead-time window of fold k-1 (`ablate_safety_stock.run_cell`)."""
     calib_path = panel_dir / "results" / f"calibration_lead{DEFAULT_LEAD}.parquet"
-    fc_path = panel_dir / "backtest_forecasts.parquet"
-    if not (calib_path.exists() and fc_path.exists()):
+    if not calib_path.exists():
         return None
     panel = pd.read_parquet(panel_dir / "panel.parquet")
     panel["date"] = pd.to_datetime(panel["date"])
-    first = pd.Timestamp(res["folds"][0][1])  # fold 1's train end: the last week of year 1
-    window = panel[(panel["date"] > first - GRAIN.period * DEFAULT_LEAD) & (panel["date"] <= first)]
+    folds = [[f[0], *(pd.Timestamp(d) for d in f[1:])] for f in res["folds"]]  # idx, train_end, ...
+
+    def level(start, end) -> float:
+        return float(panel[(panel["date"] >= start) & (panel["date"] <= end)]["y"].mean())
+
+    rows = []
+    for i, (idx, train_end, test_start, test_end) in enumerate(folds):
+        if i == 0:
+            start = train_end - GRAIN.period * (DEFAULT_LEAD - 1)
+            end, source = train_end, "the lead-time window before fold 1"
+        else:
+            start = folds[i - 1][2]
+            end = start + GRAIN.period * (DEFAULT_LEAD - 1)
+            source = f"fold {folds[i - 1][0]}'s first lead-time window"
+        rows.append(
+            {
+                "fold": idx,
+                "buffer sized from": f"{source} ({start.date()} to {end.date()})",
+                "that window (units per SKU-week)": f"{level(start, end):.1f}",
+                "this fold's test window": f"{level(test_start, test_end):.1f}",
+            }
+        )
+
     calib = pd.read_parquet(calib_path)
-    sigma = calib.groupby("model")["residual"].std()
-    forecasts = pd.read_parquet(fc_path)
+    facts = {}
+    for model in ("MovingAverage", "LightGBM"):
+        r = calib[calib["model"] == model].set_index("series_id")
+        resid = r["residual"]
+        buckets = ss.assign_buckets(r["zero_rate"], r["volume"], "intermittency")
+        sd = float(resid.std(ddof=1))
+        mad = float(1.4826 * (resid - resid.median()).abs().median())
+        sq = resid.pow(2).sort_values(ascending=False)
+        top = float(sq.head(max(1, len(sq) // 100)).sum() / sq.sum())
+        expected = DEFAULT_LEAD * r["volume"]  # expected lead-time demand per series
+        buffer = float(norm.ppf(TARGET) * sd)
+        facts[model] = {
+            "sigma": sd,
+            "robust_sigma": mad,
+            "top1pct_variance_share": top,
+            "largest_bucket_share": float(buckets.value_counts(normalize=True).iloc[0]),
+            "buffer": buffer,
+            "buffer_over_median_expected": buffer / float(expected.median()),
+            "share_buffer_over_5x": float((buffer > 5 * expected).mean()),
+        }
+    forecasts = pd.read_parquet(panel_dir / "backtest_forecasts.parquet")
     bias = forecasts.groupby("model").apply(lambda g: g["p50"].mean() / g["y"].mean() - 1)
-    cost = {m: default_cell(res)["lot2"][m]["cost"] for m in LADDER}
-    rho = float(pd.Series(sigma).rank().corr(pd.Series(cost).rank()))
-    folds = []
-    for f in res["folds"]:
-        test = panel[(panel["date"] >= f[2]) & (panel["date"] <= f[3])]
-        folds.append((f[0], float(test["y"].mean())))
-    return {
-        "window_mean": float(window["y"].mean()),
-        "window": f"{window['date'].min().date()} to {window['date'].max().date()}",
-        "folds": folds,
-        "sigma": {m: float(v) for m, v in sigma.items()},
-        "bias": {m: float(v) for m, v in bias.items()},
-        "sigma_cost_rank_corr": rho,
-    }
+    return {"rows": rows, "facts": facts, "bias": {m: float(v) for m, v in bias.items()}}
 
 
 def _diagnostic_lines(name: str, d: dict | None) -> list[str]:
     if d is None:
         return []
-    rows = [
-        {
-            "model": m,
-            "calibration sigma (units per lead time)": f"{d['sigma'][m]:.0f}",
-            "forecast bias (mean p50 / mean actual - 1)": f"{d['bias'][m]:+.0%}",
-        }
-        for m in LADDER
-    ]
-    folds = ", ".join(f"fold {i}: {v:.1f}" for i, v in d["folds"])
+    f = d["facts"]["MovingAverage"]
     return [
-        f"{name}: the calibration window ({d['window']}) averaged {d['window_mean']:.1f} units per "
-        f"SKU-week; the test folds averaged {folds}. Rank correlation between a model's "
-        f"calibration sigma and its cost rank: {d['sigma_cost_rank_corr']:.2f}.",
+        f"**{name}.** Which window sized each fold's buffer, and how busy it was:",
         "",
-        cr._md(pd.DataFrame(rows)),
+        cr._md(pd.DataFrame(d["rows"])),
+        "",
+        f"How the pooled sigma behaves, on fold 1's residuals (MovingAverage; LightGBM is alike): "
+        f"sigma {f['sigma']:.0f} units per lead time against a robust sigma (MAD) of "
+        f"{f['robust_sigma']:.0f}; the top 1% of series carry {f['top1pct_variance_share']:.0%} of "
+        f"the variance; {f['largest_bucket_share']:.0%} of series fall in the larger of the two "
+        f"intermittency buckets. The buffer that sigma gives a series in that bucket, "
+        f"{f['buffer']:.0f} units, is {f['buffer_over_median_expected']:.1f} times the median "
+        f"series' expected lead-time demand, and exceeds five times that demand for "
+        f"{f['share_buffer_over_5x']:.0%} of series. Forecast bias (mean p50 against mean "
+        f"actual): " + ", ".join(f"{m} {d['bias'][m]:+.0%}" for m in LADDER) + ".",
         "",
     ]
+
+
+WINDOW_LABELS = {
+    "single": "fold 1's window for every fold",
+    "first_window": "previous fold's first window (registered)",
+    "all_windows": "previous fold's every window",
+}
+POOLING_LABELS = {
+    "intermittency": "intermittency buckets (registered)",
+    "volume_quintile": "volume quintiles",
+}
+
+
+def _posthoc_table(ph: dict) -> pd.DataFrame:
+    rows = []
+    for key, v in ph["variants"].items():
+        window, pooling = key.split("|")
+        f1, f2, f3, f4 = v["finding_1"], v["finding_2"], v["finding_3"], v["finding_4"]
+        m = f4["moving_average_vs_lightgbm"]
+        rows.append(
+            {
+                "window": WINDOW_LABELS[window],
+                "pooling": POOLING_LABELS[pooling],
+                "LightGBM cost/fold (S>s)": _money(v["lot2"]["LightGBM"]["cost"]),
+                "1: saving / spread": f"{_money(f1['mean_saving'])} / {_money(f1['spread'])}",
+                "1": "R" if f1["replicated"] else "-",
+                "2: coverage / CSL": f"{f2['mean_coverage']:.1%} / {f2['csl_lot2']:.1%}",
+                "2": "R" if f2["replicated"] else "-",
+                "3: pairs excluding zero": f"{len(f3['excluding_zero'])} of {f3['n_pairs']}",
+                "3": "R" if f3["replicated"] else "-",
+                "4: MovingAverage minus LightGBM": f"{_money(m['point'])} {_ci(m)}",
+                "4": "R" if f4["replicated"] else "-",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _posthoc_lines(posthoc: tuple | None) -> list[str]:
+    if posthoc is None or posthoc[0] is None:
+        return []
+    lines = [
+        "## Sensitivity to the calibration (post hoc)",
+        "",
+        "**Not registered, and it changes no verdict above.** After the results, two things "
+        "about the buffer were found: fold 1's window is late November (the autumn peak), and at "
+        "weekly grain the 50%-zero-periods intermittency split leaves 98% of the primary panel's "
+        "series (65% of the robustness panel's) in one bucket, so one pooled absolute sigma, "
+        "driven by a few very large residuals, is nearly every series' buffer. This varies the "
+        "window (three ways) and the pooling (two ways) on the same cached forecasts; the "
+        "registered design is the marked cell and is reproduced to the last digit. `R` marks a "
+        "replicated verdict under the same registered rule. Nothing is tuned and no cell is "
+        "preferred.",
+        "",
+        "Primary panel:",
+        "",
+        cr._md(_posthoc_table(posthoc[0])),
+        "",
+    ]
+    if posthoc[1] is not None:
+        lines += ["Robustness panel:", "", cr._md(_posthoc_table(posthoc[1])), ""]
+    return lines
 
 
 def render_report(
-    primary: dict, robust: dict, stratum, today: str, diagnostics: tuple | None = None
+    primary: dict,
+    robust: dict,
+    stratum,
+    today: str,
+    diagnostics: tuple | None = None,
+    posthoc: tuple | None = None,
 ) -> str:
     a = track_a_reference()
     cost_p, cost_r = _cost_table(primary), _cost_table(robust)
@@ -733,17 +831,20 @@ def render_report(
         ]
     if diagnostics is not None:
         lines += [
-            "## The calibration window, descriptively",
+            "## How each fold's buffer was sized, descriptively",
             "",
-            "Post hoc and descriptive; it changes no verdict. Every model's buffer is "
-            "sized from one "
-            "window, the last two weeks of the first 52, which is late November: the autumn peak. "
-            "That window's demand level, each model's sigma from it, and each model's "
-            "forecast bias:",
+            "Post hoc and descriptive; it changes no verdict. The registered simulation "
+            "sizes fold 1 "
+            "from the lead-time window just before it (late November, the autumn peak) "
+            "and each later "
+            "fold from the first lead-time window of the fold before, one residual per "
+            "series, pooled "
+            "into one sigma per intermittency bucket.",
             "",
             *_diagnostic_lines("Primary panel", diagnostics[0]),
             *_diagnostic_lines("Robustness panel", diagnostics[1]),
         ]
+    lines += _posthoc_lines(posthoc)
     lines += [
         "## Limits that travel with every result above",
         "",
@@ -782,12 +883,21 @@ def report() -> Path:
     diagnostics = tuple(
         calibration_diagnostics(orr.PROCESSED_DIR / name, loaded[name]) for name in orr.PANELS
     )
+    posthoc = tuple(
+        (
+            json.loads((orr.PROCESSED_DIR / name / "results" / "post_hoc.json").read_text())
+            if (orr.PROCESSED_DIR / name / "results" / "post_hoc.json").exists()
+            else None
+        )
+        for name in orr.PANELS
+    )
     text = render_report(
         loaded["primary"],
         loaded["robustness"],
         stratum,
         dt.date.today().isoformat(),
         diagnostics,
+        posthoc,
     )
     out = bt.REPORTS_DIR / f"track_b_online_retail_{dt.date.today().isoformat()}.md"
     out.write_text(text)
