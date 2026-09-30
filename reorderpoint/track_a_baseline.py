@@ -21,6 +21,10 @@ What it covers, all on the real 400-series, 4-fold, HOBBIES setup every Track A 
 
 It needs the caches (`make divergence`, `make croston`) and the ingested panel, none of which are
 committed; without them the test skips and the synthetic golden test in the same file still runs.
+
+The baseline was captured on macOS arm64. It reproduces exactly on Linux arm64 and has not been
+checked on x86, where statsforecast/numpy floats differ slightly (see the note above the synthetic
+golden values in `tests/test_track_a_regression.py`).
 """
 
 from __future__ import annotations

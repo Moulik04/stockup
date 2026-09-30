@@ -2430,17 +2430,33 @@ window from 28 to 27 days trips exactly the MovingAverage entries.
 **Not done.** The fold-by-fold calibration above; Track S (the synthetic track, still optional); any
 change to the served model.
 
-**Addendum (2026-09-30): CI was red for three commits, and why.** The synthetic Track A golden test (part
-of the regression harness) failed on the x86 CI runner from the harness push (`9c5ad5f`) on: two
-SeasonalNaive entries (holding and total cost at lot 2) differ by 0.16%, while every count, the stockout
-cost, fill rate and CSL are identical. I did not check CI after `9c5ad5f` or `357355e`; I saw the failure
-only on the third push. Worth stating plainly, since the harness exists to say whether Track A moved: it
-could not tell a platform from a regression until it was run on both. So it was, in the same environments,
-before and after the refactor: on Linux arm64 both pass with the macOS values; on Linux x86 (emulated) the
-pre-refactor code fails with **bit-identical** numbers to what the post-refactor code gave on CI (67.59018316485971
-against the captured 67.62186521275511). Before and after agree exactly on each platform; only the platform
-differs. Track A did not move. The golden values had been captured on arm64, and an x86 statsforecast/numpy
-differs slightly in a float-sensitive decision. The test now compares counts exactly and the float fields
-to 0.3%, which is under the smallest effect a genuine one-period change has in it (0.5% to 48%, measured by
-moving the moving-average window from 28 to 27 days); the exact, same-platform comparison stays in the
-real-data test, which skips on CI. Lesson kept: check CI after every push, not only the last.
+**Addendum (2026-09-30): CI was red for three commits, and the first explanation I wrote was wrong.**
+The synthetic Track A golden test (part of the regression harness) failed on the x86 CI runner from the
+harness push (`9c5ad5f`) onward. I did not check CI after `9c5ad5f` or `357355e`; I saw it on the third
+push. The harness exists to say whether Track A moved, and it could not tell a platform from a regression
+until it had been run on both.
+
+*What is established* (every number of the test, dumped in full, not stopped at the first mismatch):
+on Linux arm64 and on Linux x86 (emulated), the code before the period abstraction (`ea8b6a6`) and after it
+give **identical results in every field of every entry**. Track A did not move on either platform. The
+values I froze, captured on macOS arm64, reproduce exactly on Linux arm64 (0 of 24 differ) and differ on
+x86 in 9 of 24: statsforecast and numpy give slightly different floats there and one float-sensitive
+decision flips. Costs move by up to about 1% (MovingAverage lot-2 stockout cost 1.06%) and **one whole
+replenishment cycle differs: 61 on x86 against 62** (MovingAverage, lot 2).
+
+*Correction to the first version of this addendum,* which said every count was identical and the largest
+difference 0.16%, and fixed the test with a 0.3% tolerance. That rested on a comparison that stops at the
+first mismatch (SeasonalNaive), so it never saw the cycle count or the 1% cost differences. It was wrong,
+and the tolerance was the wrong fix besides: x86 noise on that entry is as large as the effect of a real
+one-period change (moving the moving-average window from 28 to 27 days moves these numbers by 0.5% to 48%
+and changes the cycle count to 61), so a loose tolerance would have blurred the test's one job.
+
+*What the test does now:* one set of golden values per architecture, each captured from the pre-refactor
+code and compared exactly, on its own platform (arm64 set, x86 set; an unknown architecture skips rather
+than guesses). Verified where it matters: the new test and the Track B tests pass on Linux x86 and on Linux
+arm64, and on arm64 the real-data Track A regression (which runs where the caches exist) passes as well.
+The real-data baseline was captured on macOS arm64; it is exact there and on Linux arm64, and has not been
+checked on x86.
+
+Lesson kept, twice over: check CI after every push, not only the last; and a comparison that stops at its
+first failure is not evidence about the rest.

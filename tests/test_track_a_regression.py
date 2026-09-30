@@ -13,6 +13,7 @@ If either fails, Track A moved. Do not update the expected values to make it pas
 """
 
 import os
+import platform
 
 import numpy as np
 import pandas as pd
@@ -88,15 +89,29 @@ def _run(panel: pd.DataFrame) -> tuple[list, dict]:
     return fold_dates, numbers
 
 
+def _golden() -> dict:
+    machine = platform.machine().lower()
+    if machine in {"arm64", "aarch64"}:
+        return GOLDEN_ARM64
+    if machine in {"x86_64", "amd64"}:
+        return GOLDEN_X86
+    pytest.skip(f"no golden values captured for {machine}")
+
+
 def test_synthetic_daily_panel_reproduces_the_frozen_pre_refactor_numbers(serial_registry):
+    golden = _golden()
     fold_dates, numbers = _run(_panel())
     assert fold_dates == GOLDEN_FOLDS
-    assert numbers.keys() == GOLDEN.keys()
-    for key, expected in GOLDEN.items():
+    assert numbers.keys() == golden.keys()
+    problems = []
+    for key, expected in golden.items():
         got = numbers[key]
-        assert got["cycles"] == expected["cycles"], key  # a count of events: exact everywhere
-        floats = {k: v for k, v in expected.items() if k != "cycles"}
-        assert {k: got[k] for k in floats} == pytest.approx(floats, rel=FLOAT_TOLERANCE), key
+        if got["cycles"] != expected["cycles"]:  # a count of events: exact
+            problems.append((key, "cycles", got["cycles"], expected["cycles"]))
+        for field, value in expected.items():
+            if field != "cycles" and got[field] != pytest.approx(value, rel=FLOAT_TOLERANCE):
+                problems.append((key, field, got[field], value))
+    assert not problems, f"{len(problems)} numbers moved, first: {problems[:4]}"
 
 
 GOLDEN_FOLDS = [
@@ -105,18 +120,18 @@ GOLDEN_FOLDS = [
     [3, "2025-09-01", "2025-09-29"],
     [4, "2025-09-29", "2025-10-27"],
 ]
-# Cost, fill rate and CSL are compared to within 0.3%, not to the last digit. The values were
-# captured on macOS arm64 from the code before the period abstraction (commit ffdff7a) and
-# reproduce exactly on Linux arm64, before and after the refactor. The x86 CI runner differs by up
-# to 0.16% in two SeasonalNaive entries (holding and total cost, lot 2; every count, and the
-# stockout cost, fill rate and CSL, are identical): a float difference in the platform's
-# statsforecast/numpy, not Track A moving. 0.3% is under the smallest effect of a genuine
-# one-period change (moving the moving-average window from 28 to 27 days moves these numbers by
-# 0.5% to 48%). The exact comparison, on one platform, is the real-data test below.
-FLOAT_TOLERANCE = 3e-3
+# Platform matters here, and the test says so instead of hiding it behind a tolerance. statsforecast
+# and numpy give slightly different floats on x86 and arm64, and one float-sensitive decision (an
+# order triggered when on-hand falls below the reorder point) flips for MovingAverage at lot 2: 62
+# replenishment cycles on arm64, 61 on x86, with costs off by up to about 1%. So there is one set of
+# golden values per architecture, each captured from the code as it was before the period
+# abstraction (commit ffdff7a) and compared exactly, on its own platform. The arm64 set reproduces
+# on macOS and on Linux; the x86 set was captured on linux/amd64. On each platform the code before
+# and after the refactor gives identical results in every field of every entry (DECISIONS.md,
+# 2026-09-30 addendum). An unknown architecture skips rather than guess.
+FLOAT_TOLERANCE = 1e-6  # within one platform the results are deterministic; this is float slack
 
-# Captured on the code as it was before the period abstraction (commit ffdff7a).
-GOLDEN = {
+GOLDEN_ARM64 = {
     "SeasonalNaive|lot0": {
         "total_cost": 322.33548804327756,
         "holding_cost": 5.846779944622554,
@@ -148,6 +163,42 @@ GOLDEN = {
         "fill_rate": 0.9884946178523204,
         "csl": 0.8243609943977592,
         "cycles": 62,
+    },
+}
+
+
+GOLDEN_X86 = {
+    "SeasonalNaive|lot0": {
+        "total_cost": 322.33548804327756,
+        "holding_cost": 5.846779944622554,
+        "stockout_cost": 316.488708098655,
+        "fill_rate": 0.7250625471792734,
+        "csl": 0.5119731800766283,
+        "cycles": 115,
+    },
+    "SeasonalNaive|lot2": {
+        "total_cost": 67.59018316485971,
+        "holding_cost": 19.537629405414425,
+        "stockout_cost": 48.05255375944528,
+        "fill_rate": 0.955132909231963,
+        "csl": 0.5741071428571429,
+        "cycles": 63,
+    },
+    "MovingAverage|lot0": {
+        "total_cost": 274.38691293464194,
+        "holding_cost": 6.223121872395113,
+        "stockout_cost": 268.16379106224684,
+        "fill_rate": 0.7682793418586472,
+        "csl": 0.5542898193760263,
+        "cycles": 117,
+    },
+    "MovingAverage|lot2": {
+        "total_cost": 34.6608971749083,
+        "holding_cost": 21.69788095315458,
+        "stockout_cost": 12.963016221753712,
+        "fill_rate": 0.9882322796999866,
+        "csl": 0.8233193277310924,
+        "cycles": 61,
     },
 }
 
