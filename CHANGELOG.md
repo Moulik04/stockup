@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.3.1 — 2026-09-30
+
+Docs only; no code and no new runs.
+
+- **The Track B pooling result is tied back to Track A** (DECISIONS.md): the 50%-zeros intermittency
+  threshold was calibrated on daily data and stops separating series at weekly grain, and the pooling
+  choice made on Track A depends on time grain and volume spread, so it does not transfer.
+- **README "Where it fails"** now says the shipped sizing pools residual sigma in absolute units and
+  overstocks heavily when SKU volumes vary widely (Track B: a buffer 7.3 times the median series'
+  lead-time demand).
+- **README "What I'd do with a budget"** now lists scale-invariant pooling, to be pre-registered before
+  it is tested on both tracks.
+
 ## v1.3.0 — 2026-09-30
 
 A pre-registered replication of the project's findings on a second, very different real business, and

@@ -2530,3 +2530,36 @@ Differences that matter here are tens of percent and stable across platforms, or
 **Standing rule, added to `CLAUDE.md`:** check CI after every push, and do not report "pushed" until it
 is green. Twice in this project a red CI was left for commits: the harness push (`9c5ad5f` onward) and, before
 that, an image that had never built. Both came from reporting on a push instead of on its result.
+
+## 2026-09-30 — Track A's intermittency threshold and pooling choice do not transfer to weekly grain
+
+**Docs only; nothing was re-run.** This connects the calibration entry above to Track A, which that entry
+left implicit.
+
+- **The threshold is a Track A parameter.** The shipped sizing splits series into two buckets at 50% zero
+  periods. That cut was calibrated on daily M5 data, where it separates a 90/10 split of series. At weekly
+  grain on Track B it puts 98% of the primary panel's series (65% of the robustness panel's) in one
+  bucket, so the split no longer distinguishes anything. The grain changed what the parameter measures,
+  and it was carried over without re-deriving its job (the same point as the calibration entry, stated
+  here as a property of the threshold).
+- **Why that matters for the pooling.** With one bucket doing nearly all the work, the buffer is one
+  absolute sigma pooled across series of very different volume: a 300-unit buffer, 7.3 times the median
+  series' expected lead-time demand and above 5 times for 61% of series. Track A had already shown the
+  same defect in smaller form (v1.1 Task 5, 2026-09-16: per-series residual std spans p90/p10 of about 8
+  inside one bucket, and finer pooling bought 9.4% of cost). It stayed the shipped default there because
+  the saving came with a CSL regression and was a decision for the owner; the spread inside the bucket is
+  far wider on Track B and the stakes are larger (about 25% of cost under volume quintiles, post hoc).
+- **So the pooling choice does not transfer either.** Whether two intermittency buckets are adequate
+  depends on the time grain and on how widely series volumes spread, and neither is a constant across
+  datasets. "Two intermittency buckets are fine" was a Track A result and is now recorded as one.
+
+**What this does not say.** It does not show that a scale-invariant pooling would fix Track B; that has not
+been run. The post hoc evidence that pooling is the lever (volume quintiles) is itself an absolute-unit
+scheme within each quintile, so it supports "pooling matters", not "scale-invariant pooling works". It
+explains finding 2's failure better than the window does and explains nothing about findings 1, 3 and 4.
+Over-forecasting of the declining panel (mean p50 17-46% above realised) also inflates buffers
+independently of the pooling.
+
+**Where it went.** README "Where it fails" (the shipped sizing over-provisions when volumes spread widely)
+and "What I'd do with a budget" (scale-invariant pooling, to be pre-registered before it is tested on
+either track). The registered documents are unchanged.

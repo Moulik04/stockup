@@ -805,6 +805,17 @@ guesses.
   conditional on the two cost parameters (holding rate: named source, not retail-specific; lost
   margin: Walmart U.S., a lower bound), the service target, and the ordering policy — see "The
   finding".
+- **The shipped sizing pools residual sigma in absolute units, and on a panel whose volumes spread
+  widely that overstocks heavily.** On Track B (weekly grain, one dominant bucket) it gives every
+  series a buffer of about 300 units, 7.3 times the median series' expected lead-time demand and above
+  5 times for 61% of series; coverage is 98.1% against a 95% target, and Track A's volume-quintile
+  buckets cut cost about 25% on the same forecasts (post hoc). The 50%-zeros intermittency threshold
+  was calibrated on daily data and stops separating series at weekly grain, so the pooling that
+  worked acceptably on Track A does not carry over: it depends on time grain and on the spread of
+  volumes. Anyone applying this to a business whose SKU volumes vary widely should expect heavy
+  overstocking until that is fixed; the fix proposed below has not been tested. One dataset, and
+  other effects (every model over-forecasts the declining Track B panel) add to the buffers, so the
+  25% is an upper reading of what pooling alone costs. See `DECISIONS.md`, 2026-09-30.
 - **Intermittent demand is the hard case, consistently.** Series with >50% zero-sale training days
   score far worse than the rest under every model tested: AutoTheta (Phase 2) MASE 1.612 vs. 0.777;
   NBEATS (Phase 7) 1.150 vs. 0.732. This is the central justification for LightGBM's Tweedie
@@ -871,6 +882,12 @@ guesses.
   Bridges-2 run, not worth GPU time on its own. Phase 7's NBEATS numbers are aggregate tables only
   (the per-series detail was discarded on the cluster); `run_deep_backtest.py` now saves it, so any
   future run recovers it for free.
+- **Scale-invariant pooling, pre-registered, then tested on both tracks.** Pool residuals relative to
+  each series' level (scaled by its mean, or as a coefficient of variation) and rescale per series, so
+  no bucket threshold depends on time grain. It was proposed in the v1.1 Task 5 brief and never tested.
+  Before any run it needs a registered design and decision rules, including how series with a zero or
+  near-zero level are handled; it must be run on Track A and Track B alike, and reported beside the
+  registered verdicts, not in place of them.
 - **A per-SKU service target from the critical ratio,** instead of one uniform 95%. At the legacy
   2%/day the critical ratio spans ~68% to ~97% across SKUs with price, so a uniform target is wrong
   for most; at the 25%/yr default it is ≥98.4% for nearly all (p10 0.984), and the per-SKU case
